@@ -4,18 +4,25 @@ import random
 import sapien
 import torch
 import matplotlib.pyplot as plt
-
-from mani_skill.envs.sapien_env import BaseEnv
-from mani_skill.utils.wrappers import RecordEpisode
+import os
+import json
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from PIL import Image
+from tqdm import tqdm
 
 import tyro
 from dataclasses import dataclass
 from typing import List, Optional, Annotated, Union
 
+from mani_skill.envs.sapien_env import BaseEnv
+from mani_skill.utils.wrappers import RecordEpisode
+
 import clevr_env  # to register env, not used otherwise
+from utils_env_interventions import move_object_onto
 from utils_trajectory import project_points, generate_curve_torch, plot_gradient_curve
 from utils_trajectory import subsample_trajectory
-from utils_env_interventions import move_object_onto
+from utils_traj_tokens import traj2d_to_tokenstr
 
 from pdb import set_trace
 
@@ -75,7 +82,7 @@ def clip_and_interpolate(curve_2d, camera):
     return curve2d_short
 
 
-def main(args: Args):
+def main(args: Args, plot=True):
     np.set_printoptions(suppress=True, precision=3)
     verbose = not args.quiet
     reset_random(args)
@@ -110,7 +117,7 @@ def main(args: Args):
         print("Control mode", env.unwrapped.control_mode)
         print("Reward mode", env.unwrapped.reward_mode)
 
-    while True:
+    for _ in range(10**6):
         obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         if args.seed is not None:
             env.action_space.seed(args.seed[0])
@@ -121,88 +128,110 @@ def main(args: Args):
             env.render()
     
         env_id = 0
-        # get before image
-        from mani_skill.utils import common, sapien_utils
 
+        # in theory randomize camera position
         #cam_pose = sapien_utils.look_at([0.6, 0.7, 0.6], [0.0, 0.0, 0.35])
         #env.base_env.scene.human_render_cameras['render_camera'].camera._render_cameras[0].set_local_pose(cam_pose)
+        
+        # get before image
         images = env.base_env.scene.get_human_render_camera_images('render_camera')
         image_before = images['render_camera'][env_id].numpy()
 
-        # do intervention
-        start_pose, end_pose, action_text = move_object_onto(env)
+        # do intervention ( this will set env.base_env.cubeA / cubeB)
+        start_pose, end_pose, action_text = move_object_onto(env, pretend=True)
+        #set_trace()
 
         # convert to trajectory
         camera = env.base_env.scene.human_render_cameras['render_camera'].camera
         _, curve_3d = generate_curve_torch(start_pose.get_p(), end_pose.get_p())
         curve_2d = project_points(camera, curve_3d)
-
-
-        # get after image
-        env.render()
-        images = env.base_env.scene.get_human_render_camera_images('render_camera')
-        image_after = images['render_camera'][env_id].numpy()
-
-        # plot
-        fig, axs = plt.subplots(1, 2)
-        axs[0].imshow(image_before)
-        axs[1].imshow(image_after)
-        #[x.axis('off') for x in axs]
-
-        from utils_traj_tokens import traj2d_to_tokenstr
         curve_2d_short = clip_and_interpolate(curve_2d, camera)
         traj_token_str = traj2d_to_tokenstr(curve_2d_short[env_id], (camera.width, camera.height), "1")
-        print("prefix", action_text)
-        print("suffix", traj_token_str)
-
-        x, y = curve_2d[env_id, :, 0].tolist(), curve_2d[env_id, :, 1].tolist()
-        plot_gradient_curve(axs[0], x, y)
-        axs[0].plot(curve_2d_short[env_id,:,0], curve_2d_short[env_id, :,1],'.-')
-
-        fig.text(.05,.1, "^ "+action_text)
-        plt.tight_layout()
-        plt.show()
+        #print("prefix", action_text)
+        #print("suffix", action_text)
         
+        # plot
+        if plot:
+            # get after image
+            env.render()
+            images = env.base_env.scene.get_human_render_camera_images('render_camera')
+            image_after = images['render_camera'][env_id].numpy()
+
+            fig, axs = plt.subplots(1, 2)
+            axs[0].imshow(image_before)
+            axs[1].imshow(image_after)
+            #[x.axis('off') for x in axs]
+
+            x, y = curve_2d[env_id, :, 0].tolist(), curve_2d[env_id, :, 1].tolist()
+            plot_gradient_curve(axs[0], x, y)
+            axs[0].plot(curve_2d_short[env_id,:,0], curve_2d_short[env_id, :,1],'.-')
+
+            fig.text(.05,.1, "^ "+action_text)
+            plt.tight_layout()
+            plt.show()
+        
+        run_policy = True
+        from mani_skill.examples.motionplanning.panda.solutions import solveStackCube
+        solve = solveStackCube
+        if run_policy:
+            #try:
+            res = solve(env, seed=args.seed[0], debug=False, vis=True)
+            #except Exception as e:
+            #    print(f"Cannot find valid solution because of an error in motion planning solution: {e}")
+            #    res = -1
+
         # roll dice
         reset_random(args, force=True)
-        print("done.")
+        #print("done.")
 
-
-
-
-    while True:
-        action = env.action_space.sample()
-        obs, reward, terminated, truncated, info=env.step(action)
-        if verbose:
-            print("reward", reward)
-            print("terminated", terminated)
-            print("truncated", truncated)
-            print("info", info)
-        if args.render_mode is not None:
-            env.render()
-        if args.render_mode is None or args.render_mode != "human":
-            if (terminated | truncated).any():
-                break
-        
-
-
-        def move_object(env, delta_pos=[0, 0, 0.1]):
-            scene = env.base_env.scene
-            object = scene.get_all_actors()[1]
-            pose = object.pose
-            pose.set_p(pose.p + delta_pos)
-            object.set_pose(pose)
-            #set_trace()
-
-        #move_object(env)
-        #move_camera(env)
+        #yield image_before, action_text, traj_token_str, args.seed[0]
 
     env.close()
 
-    if record_dir:
-        print(f"Saving video to {record_dir}")
 
+def save_dataset(sample_generator, N: int, dataset_path):
+    
+    os.makedirs(dataset_path, exist_ok=True)
+
+    # Initialize a ThreadPoolExecutor with one or more workers
+    executor = ThreadPoolExecutor(max_workers=3)
+
+    def save_image(image, path) -> None:
+        Image.fromarray(image).save(path, format='JPEG')
+        
+    def save_image_async(image, path) -> None:
+        # Submit the save_image task to be run in a separate thread
+        executor.submit(save_image, image, path)
+
+    def save_labels(annotations):
+        json_file = dataset_path / "_annotations.all.jsonl"
+        # "a" means append to the file
+        with open(json_file, "a") as f:
+            for obj in annotations:
+                json.dump(obj, f)
+                f.write("\n")
+
+    annotations = []
+    for i in tqdm(range(N)):
+        image_before, action_text, traj_token_str, rnd_seed = next(sample_generator)
+        sample_name = str(rnd_seed).zfill(10)
+        image_filename = f"CLEVR_{sample_name}.jpg"
+        json_label = dict(image=image_filename, prefix=action_text, suffix=traj_token_str)
+        save_image_async(image_before, dataset_path / image_filename)
+        annotations.append(json_label)
+        if i % 100 == 0:
+            save_labels(annotations)
+            annotations = []
+    save_labels(annotations)
+    print("done.")
+        
 
 if __name__ == "__main__":
     parsed_args = tyro.cli(Args)
+    #Important: in order to save dataset comment the yeild line in the main function.
     main(parsed_args)
+
+    #Important: in order to save dataset uncomment the yeild line in the main function.
+    # python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array"
+    #10000/0.8
+    #save_dataset(main(parsed_args, plot=False), N=int(100), dataset_path=Path("/tmp/clevr-act-2/dataset"))

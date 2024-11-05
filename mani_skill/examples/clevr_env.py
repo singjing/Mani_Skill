@@ -1,3 +1,6 @@
+"""
+
+"""
 from typing import Any, Dict, Union
 
 import numpy as np
@@ -64,7 +67,6 @@ class StackCubeEnv(BaseEnv):
         colors_choice = randomization.uniform(0.0, float(len(self.colors)),size=(num_objects,)).cpu().numpy().astype(int)
         sizes_choice = randomization.uniform(0.0, float(len(self.sizes)),size=(num_objects,)).cpu().numpy().astype(int)
 
-
         self.objects = []
         self.objects_descr = []
         for i in range(num_objects):
@@ -95,28 +97,7 @@ class StackCubeEnv(BaseEnv):
             region = [[-0.1, -0.2], [0.1, 0.2]]
             sampler = randomization.UniformPlacementSampler(bounds=region, batch_size=b)
             radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001
-            """
-            cubeA_xy = xy + sampler.sample(radius, max_trials=100)
-            cubeB_xy = xy + sampler.sample(radius, max_trials=100, verbose=False)
 
-            xyz[:, :2] = cubeA_xy
-            qs = randomization.random_quaternions(
-                b,
-                lock_x=True,
-                lock_y=True,
-                lock_z=False,
-            )
-            self.cubeA.set_pose(Pose.create_from_pq(p=xyz.clone(), q=qs))
-
-            xyz[:, :2] = cubeB_xy
-            qs = randomization.random_quaternions(
-                b,
-                lock_x=True,
-                lock_y=True,
-                lock_z=False,
-            )
-            self.cubeB.set_pose(Pose.create_from_pq(p=xyz, q=qs))
-            """
             for shape, descr in zip(self.objects, self.objects_descr):
                 shape_xy = xy + sampler.sample(radius, max_trials=100)
                 xyz[:, :2] = shape_xy

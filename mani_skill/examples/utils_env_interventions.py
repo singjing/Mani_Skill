@@ -16,7 +16,15 @@ def create_text_names(env):
 
 
 # Environment interactions
-def move_object_onto(env, randomize_text=False):
+
+# def move_object(env, delta_pos=[0, 0, 0.1]):
+#     scene = env.base_env.scene
+#     object = scene.get_all_actors()[1]
+#     pose = object.pose
+#     pose.set_p(pose.p + delta_pos)
+#     object.set_pose(pose)
+
+def move_object_onto(env, randomize_text=False, pretend=False):
     objects = env.base_env.objects
     assert len(objects) >= 2
     object_id_move, object_id_base = np.random.choice(range(len(objects)), 2, replace=False)
@@ -29,8 +37,12 @@ def move_object_onto(env, randomize_text=False):
     pos_new[:, 0:2] = pos_base[:, 0:2]
     pos_new[:, 2] = pos_new[:, 2] + 2*pos_base[:, 2]
     end_pose.set_p(pos_new)
-    objects[object_id_move].set_pose(end_pose)
-
+    if not pretend:
+        objects[object_id_move].set_pose(end_pose)
+    
+    env.base_env.cubeA = objects[object_id_move]
+    env.base_env.cubeB = objects[object_id_base]
+    
     # now creat a text
     text_names = create_text_names(env)
     verbs = ["move", "place", "transfer", "set", "position", "lift", "relocate", "shift", "put", "bring"]
@@ -43,3 +55,4 @@ def move_object_onto(env, randomize_text=False):
         prep = prepositions[0]
     action_text = f"{verb} {text_names[object_id_move]} {prep} {text_names[object_id_base]}"
     return start_pose, end_pose, action_text
+
