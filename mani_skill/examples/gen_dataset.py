@@ -157,7 +157,7 @@ def main(args: Args, plot=True):
         print("Reward mode", env.unwrapped.reward_mode)
     print("Render mode", args.render_mode)
 
-    vis = False
+    vis = True
     for _ in range(10**6):
         obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         if args.seed is not None:
@@ -193,24 +193,24 @@ def main(args: Args, plot=True):
                          camera_intrinsic=camera.get_intrinsic_matrix().detach().numpy().tolist(),
                          start_pose=start_pose.raw_pose.detach().numpy().tolist(),
                          end_pose=end_pose.raw_pose.detach().numpy().tolist())
+        
+        # note: this runs clevr_env_solver, but goal position is coming from move_object_onto
         save_solve_policy_to_json(env, args, camera, json_dict, vis)
 
         if action_text.split()[3] == "sphere":
             # TODO(max): Find a good angle to do grasp
-            print(env.unwrapped.agent.tcp.pose.get_q()[0])
-            print(torch.tensor(json_dict['traj_q'][0]))
-
             from scipy.spatial.transform import Rotation as R
             from mani_skill.utils.structs.pose import Pose
-
             rot = R.from_matrix(env.unwrapped.agent.tcp.pose.to_transformation_matrix()[0, :3, :3].numpy())
-            print(rot.as_euler('xyz', degrees=True))
-            
             rot2 = R.from_matrix(Pose.create_from_pq(p=None, q=torch.tensor(json_dict['traj_q'][0])).to_transformation_matrix()[0, :3, :3].numpy())
-            print(rot2.as_euler('xyz', degrees=True))
-
+            
+            # print(env.unwrapped.agent.tcp.pose.get_q()[0])
+            # print(torch.tensor(json_dict['traj_q'][0]))
+            # print(rot.as_euler('xyz', degrees=True))
+            # print(rot2.as_euler('xyz', degrees=True))
             #set_trace()
 
+        
         _, curve_3d = generate_curve_torch(start_pose.get_p(), end_pose.get_p(), num_points=2)
         orns_3d = torch.tensor(json_dict['traj_q'][0])
         orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
@@ -254,6 +254,8 @@ def main(args: Args, plot=True):
         res = planner.open_gripper()
         print("reward", env.unwrapped.eval_reward())
         planner.close()
+
+        #set_trace()
 
         #curve_3d_parse = decode_trajectory_xyz(traj_xyz_str, camera)
         #print("prefix", action_text)

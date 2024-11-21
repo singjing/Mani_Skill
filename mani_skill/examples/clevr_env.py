@@ -16,6 +16,7 @@ from mani_skill.utils.building import actors
 from mani_skill.utils.registration import register_env
 from mani_skill.utils.scene_builder.table import TableSceneBuilder
 from mani_skill.utils.structs.pose import Pose
+from mani_skill.utils.io_utils import load_json
 
 from pdb import set_trace
 
@@ -35,6 +36,11 @@ class StackCubeEnv(BaseEnv):
         self, *args, robot_uids="panda_wristcam", robot_init_qpos_noise=0.02, **kwargs
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
+        self.ycb_model_ids = np.array(
+            list(
+                load_json(ASSET_DIR / "assets/mani_skill2_ycb/info_pick_v0.json").keys()
+            )
+        )
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
     @property
@@ -52,17 +58,8 @@ class StackCubeEnv(BaseEnv):
         pose = sapien_utils.look_at(new_p, end_p)
         return CameraConfig("render_camera", pose, 448, 448, 1, 0.01, 100)
 
-    def _load_scene(self, options: dict):
-        self.cube_half_size = common.to_tensor([0.02] * 3)
-        self.table_scene = TableSceneBuilder(
-            env=self, robot_init_qpos_noise=self.robot_init_qpos_noise
-        )
-        self.table_scene.build()
-
-        min_objects = 2
-        max_objects = 5
-
-        num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
+    def _load_scene_clevr(self, num_objects):
+        # create random shapes
         shapes_choice = randomization.uniform(0.0, float(len(self.shapes)),size=(num_objects,)).cpu().numpy().astype(int)
         colors_choice = randomization.uniform(0.0, float(len(self.colors)),size=(num_objects,)).cpu().numpy().astype(int)
         sizes_choice = randomization.uniform(0.0, float(len(self.sizes)),size=(num_objects,)).cpu().numpy().astype(int)
@@ -83,7 +80,38 @@ class StackCubeEnv(BaseEnv):
                          color=list(self.colors.keys())[colors_choice[i]])
             self.objects_descr.append(descr)
 
-        self.cubeA = self.objects[0]
+    def _load_scene_ycb(self, num_objects):
+        model_ids = randomization.uniform(0.0, float(len(self.ycb_model_ids)),size=(num_objects,)).cpu().numpy().astype(int)
+        for i, model_idx in enumerate(model_ids):
+            model_id = self.ycb_model_ids[model_idx]
+            #model_id = "043_phillips_screwdriver"
+            # TODO: before official release we will finalize a metadata dataclass that these build functions should return.
+            builder = actors.get_actor_builder(
+                self.scene,
+                id=f"ycb:{model_id}",
+            )
+            #builder.set_scene_idxs([i])
+            self.objects.append(builder.build(name=f"{model_id}-{i}"))
+            self.objects_descr.append(dict(size="small", color="", shape="model_id"))
+    
+    def _load_scene(self, options: dict):
+        self.cube_half_size = common.to_tensor([0.02] * 3)
+        self.table_scene = TableSceneBuilder(
+            env=self, robot_init_qpos_noise=self.robot_init_qpos_noise
+        )
+        self.table_scene.build()
+
+        min_objects = 2
+        max_objects = 5
+
+        num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
+        
+        self.objects = []
+        self.objects_descr = []
+        self._load_scene_ycb(num_objects)
+        #self._load_scene_clevr(num_objects)
+
+        self.cubeA = self.objects[0]  
         self.cubeB = self.objects[1]
         
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
@@ -95,9 +123,9 @@ class StackCubeEnv(BaseEnv):
             xyz[:, 2] = 0.02
             xy = torch.rand((b, 2)) * 0.2 - 0.1
             region = [[-0.1, -0.2], [0.1, 0.2]]
+
             sampler = randomization.UniformPlacementSampler(bounds=region, batch_size=b)
             radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001
-
             for shape, descr in zip(self.objects, self.objects_descr):
                 shape_xy = xy + sampler.sample(radius, max_trials=100)
                 xyz[:, :2] = shape_xy
@@ -112,13 +140,14 @@ class StackCubeEnv(BaseEnv):
 
 
     def set_goal_pose(self, objA_goal_pose):
+        # Move cubeA onto cubeB
         self.objA_goal_pose = objA_goal_pose
-        self.objA_p_dist_inital = torch.linalg.norm(self.cubeB.pose.p - objA_goal_pose.p, axis=1)
+        self.objA_to_goal_dist_inital = torch.linalg.norm(self.cubeA.pose.p - objA_goal_pose.p, axis=1)
 
     def eval_reward(self):
         objA_pose = self.cubeA.pose.p
-        objB_to_goal_dist = torch.linalg.norm(objA_pose - self.objA_goal_pose.p, axis=1)
-        reward = torch.clamp(1 - objB_to_goal_dist / self.objA_p_dist_inital, 0, 1)
+        objA_to_goal_dist = torch.linalg.norm(objA_pose - self.objA_goal_pose.p, axis=1)
+        reward = torch.clamp(1 - objA_to_goal_dist / self.objA_to_goal_dist_inital, 0, 1)
         return reward
         
     # This is the old code below. It is not used in the current implementation.

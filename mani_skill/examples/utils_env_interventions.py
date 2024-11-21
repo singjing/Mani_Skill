@@ -3,6 +3,7 @@ from typing import List
 import numpy as np
 from mani_skill.utils.structs import Pose
 
+from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
 
 # Text Generation stuff
 
@@ -36,8 +37,18 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     pos_new = start_pose.get_p().clone().detach()  # don't forget
     pos_base = pose_base.get_p()
     pos_new[:, 0:2] = pos_base[:, 0:2]
-    pos_new[:, 2] = pos_new[:, 2] + 2*pos_base[:, 2]
+    
+    obbB = get_actor_obb(env.unwrapped.cubeB, to_world_frame=True)
+    obbA = get_actor_obb(env.unwrapped.cubeA, to_world_frame=True)
+    height = pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2
+    height = obbB.vertices[:, 2].max() + (obbA.vertices[:, 2].max() - obbA.vertices[:, 2].min())/2
+    #from pdb import set_trace
+    #set_trace()
+    old_height = pos_new[:, 2] + 2*pos_base[:, 2]
+    #print(">>>", old_height, height)
+    pos_new[:, 2] = height
     end_pose.set_p(pos_new)
+
     if not pretend:
         objects[object_id_move].set_pose(end_pose)
     
@@ -57,3 +68,12 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     action_text = f"{verb} {text_names[object_id_move]} {prep} {text_names[object_id_base]}"
     return start_pose, end_pose, action_text
 
+
+# TODO(shardul):
+# Option1: start here
+# move_object_next_to
+# move_object_leftrightbehind
+# move_object_upright (select shapes)
+# move_object_between
+# upside down
+# rotate

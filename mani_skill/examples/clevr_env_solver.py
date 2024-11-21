@@ -1,3 +1,4 @@
+# see examples/motionplanning/panda/solutions/stack_cube.py for the template of this
 import argparse
 import gymnasium as gym
 import numpy as np
@@ -9,7 +10,6 @@ from mani_skill.examples.motionplanning.panda.motionplanner import \
     PandaArmMotionPlanningSolver
 from mani_skill.examples.motionplanning.panda.utils import (
     compute_grasp_info_by_obb, get_actor_obb)
-from mani_skill.utils.wrappers.record import RecordEpisode
 
 
 def solve(env: StackCubeEnv, seed=None, debug=False, vis=False, dry_run=False):
