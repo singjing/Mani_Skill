@@ -1,3 +1,10 @@
+"""
+Option 1: record inital frames:
+python gen_dataset.py -e "ClevrMove-v1"   --render-mode="rgb_array" 
+
+Option 2: record trajectories
+python gen_dataset.py -e "ClevrMove-v1"   --render-mode="rgb_array" -c "pd_joint_pos"
+"""
 import gymnasium as gym
 import numpy as np
 import random
@@ -21,8 +28,8 @@ from mani_skill.utils.wrappers import RecordEpisode
 import clevr_env  # to register env, not used otherwise
 from utils_env_interventions import move_object_onto
 from utils_trajectory import project_points, generate_curve_torch, plot_gradient_curve
-from utils_trajectory import subsample_trajectory
-from utils_traj_tokens import traj2d_to_tokenstr
+from utils_trajectory import clip_and_interpolate
+from utils_traj_tokens import encode_trajectory_xy, encode_trajectory_xyz
 
 from pdb import set_trace
 
@@ -74,13 +81,43 @@ def reset_random(args, force=True):
     np.random.seed(args.seed[0])
 
 
-def clip_and_interpolate(curve_2d, camera):
-    curve_2d_clip = curve_2d.clone()
-    curve_2d_clip[:, :, 0] = torch.clip(curve_2d_clip[:, :, 0], 0+1, camera.width)
-    curve_2d_clip[:, :, 1] = torch.clip(curve_2d_clip[:, :, 1], 0+1, camera.height)
-    curve2d_short = subsample_trajectory(curve_2d_clip, points_new=5)
-    return curve2d_short
+def save_solve_policy_to_json(env, args, camera, json_dict, vis):
+    #from mani_skill.examples.motionplanning.panda.solutions import solveStackCube
+    #solve = solveStackCube
+    from clevr_env_solver import solve
+    #try:
+    res = solve(env, seed=args.seed[0], debug=False, vis=vis, dry_run=True)
+    #except Exception as e:
+    #    print(f"Cannot find valid solution because of an error in motion planning solution: {e}")
+    #    res = -1
 
+    traj_poses_3d = []
+    traj_orns_3d = []
+    traj_gripper = []
+    for wp in res:
+        if isinstance(wp, sapien.Pose):
+            traj_poses_3d.append(wp.get_p())
+            traj_orns_3d.append(wp.get_q())
+        elif wp == "close_gripper" or wp == "open_gripper":
+            gripper_act = 0 if wp == "close_gripper" else 1
+            gripper_act_n = 1 if wp == "close_gripper" else 0
+            if traj_gripper == []:
+                traj_gripper.extend([gripper_act_n]*(len(traj_poses_3d)-1))
+                traj_gripper.append(gripper_act)
+            else:
+                traj_gripper.extend([traj_gripper[-1]]*(len(traj_poses_3d)-len(traj_gripper)-1))
+                traj_gripper.append(gripper_act)
+
+    traj_poses_3d = np.array(traj_poses_3d).tolist()
+    traj_orns_3d = np.array(traj_orns_3d).tolist()
+    traj_gripper = np.array(traj_gripper).tolist()
+    scene_data = dict(traj_p=traj_poses_3d, traj_q=traj_orns_3d, traj_g=traj_gripper)
+    json_dict.update(scene_data)          
+
+    # plot the trajectory
+    # curve_2d = project_points(camera, torch.tensor([traj_poses_3d]))
+    # x, y = curve_2d[env_idx, :, 0].tolist(), curve_2d[env_idx, :, 1].tolist()
+    # plot_gradient_curve(axs[0], x, y)
 
 def main(args: Args, plot=True):
     np.set_printoptions(suppress=True, precision=3)
@@ -108,26 +145,31 @@ def main(args: Args, plot=True):
     )
     record_dir = args.record_dir
     if record_dir:
+        sample_name = str(args.seed[0]).zfill(10)
+        new_traj_name = f"CLEVR_{sample_name}"
         record_dir = record_dir.format(env_id=args.env_id)
-        env = RecordEpisode(env, record_dir, info_on_video=False, save_trajectory=False, max_steps_per_video=env._max_episode_steps)
+        env = RecordEpisode(env, record_dir, trajectory_name=new_traj_name, info_on_video=False, save_trajectory=True, max_steps_per_video=env._max_episode_steps)
 
     if verbose:
         print("Observation space", env.observation_space)
         print("Action space", env.action_space)
         print("Control mode", env.unwrapped.control_mode)
         print("Reward mode", env.unwrapped.reward_mode)
+    print("Render mode", args.render_mode)
 
+    vis = False
     for _ in range(10**6):
         obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         if args.seed is not None:
             env.action_space.seed(args.seed[0])
-        if args.render_mode is not None:
+        if vis and args.render_mode is not None:
             viewer = env.render()
             if isinstance(viewer, sapien.utils.Viewer):
                 viewer.paused = args.pause
             env.render()
-    
-        env_id = 0
+        else:
+            env.render()
+        env_idx = 0
 
         # in theory randomize camera position
         #cam_pose = sapien_utils.look_at([0.6, 0.7, 0.6], [0.0, 0.0, 0.35])
@@ -135,56 +177,119 @@ def main(args: Args, plot=True):
         
         # get before image
         images = env.base_env.scene.get_human_render_camera_images('render_camera')
-        image_before = images['render_camera'][env_id].numpy()
+        image_before = images['render_camera'][env_idx].numpy()
 
         # do intervention ( this will set env.base_env.cubeA / cubeB)
         start_pose, end_pose, action_text = move_object_onto(env, pretend=True)
-        #set_trace()
-
-        # convert to trajectory
+        env.unwrapped.set_goal_pose(end_pose)
+        
+        # convert to default trajectory
         camera = env.base_env.scene.human_render_cameras['render_camera'].camera
         _, curve_3d = generate_curve_torch(start_pose.get_p(), end_pose.get_p())
-        curve_2d = project_points(camera, curve_3d)
-        curve_2d_short = clip_and_interpolate(curve_2d, camera)
-        traj_token_str = traj2d_to_tokenstr(curve_2d_short[env_id], (camera.width, camera.height), "1")
+        traj_token_str = encode_trajectory_xy(curve_3d, camera)
+
+        json_dict = dict(prefix=action_text, suffix=traj_token_str,
+                         camera_extrinsic=camera.get_extrinsic_matrix().detach().numpy().tolist(),
+                         camera_intrinsic=camera.get_intrinsic_matrix().detach().numpy().tolist(),
+                         start_pose=start_pose.raw_pose.detach().numpy().tolist(),
+                         end_pose=end_pose.raw_pose.detach().numpy().tolist())
+        save_solve_policy_to_json(env, args, camera, json_dict, vis)
+
+        if action_text.split()[3] == "sphere":
+            # TODO(max): Find a good angle to do grasp
+            print(env.unwrapped.agent.tcp.pose.get_q()[0])
+            print(torch.tensor(json_dict['traj_q'][0]))
+
+            from scipy.spatial.transform import Rotation as R
+            from mani_skill.utils.structs.pose import Pose
+
+            rot = R.from_matrix(env.unwrapped.agent.tcp.pose.to_transformation_matrix()[0, :3, :3].numpy())
+            print(rot.as_euler('xyz', degrees=True))
+            
+            rot2 = R.from_matrix(Pose.create_from_pq(p=None, q=torch.tensor(json_dict['traj_q'][0])).to_transformation_matrix()[0, :3, :3].numpy())
+            print(rot2.as_euler('xyz', degrees=True))
+
+            #set_trace()
+
+        _, curve_3d = generate_curve_torch(start_pose.get_p(), end_pose.get_p(), num_points=2)
+        orns_3d = torch.tensor(json_dict['traj_q'][0])
+        orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
+        
+        encode_decode_trajectory = False
+        if encode_decode_trajectory:
+            # Option 2: encode trajectory as xyz
+            from utils_traj_tokens import parse_trajectory_xyz
+            from utils_trajectory import unproject_points
+            curve_25d, depth, token_str = encode_trajectory_xyz(curve_3d, camera)
+            curve_25d = parse_trajectory_xyz(token_str, camera, num_tokens=3)
+            curve_3d_est = unproject_points(camera, curve_25d) 
+            curve_3d = curve_3d_est # set the unparsed trajectory one used for policy
+
+        # Evaluate the trajectory
+        from mani_skill.utils.structs import Pose
+        from mani_skill.examples.motionplanning.panda.motionplanner import \
+            PandaArmMotionPlanningSolver
+        
+        #set_trace()
+        _, curve_3d_i = generate_curve_torch(start_pose.get_p(), end_pose.get_p(), num_points=3)
+        #orn = env.unwrapped.agent.tcp.pose.get_q()
+        grasp_pose = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
+        reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
+        lift_pose = Pose.create_from_pq(p=curve_3d_i[:, 1], q=orns_3d[:, 1])
+        align_pose = Pose.create_from_pq(p=curve_3d_i[:, 2], q=orns_3d[:, 1])
+
+        planner = PandaArmMotionPlanningSolver(
+            env,
+            debug=False,
+            vis=vis,
+            base_pose=env.unwrapped.agent.robot.pose,
+            visualize_target_grasp_pose=vis,
+            print_env_info=False,
+        )
+        planner.move_to_pose_with_screw(reach_pose)
+        planner.move_to_pose_with_screw(grasp_pose)
+        planner.close_gripper()
+        planner.move_to_pose_with_screw(lift_pose)
+        planner.move_to_pose_with_screw(align_pose)
+        res = planner.open_gripper()
+        print("reward", env.unwrapped.eval_reward())
+        planner.close()
+
+        #curve_3d_parse = decode_trajectory_xyz(traj_xyz_str, camera)
         #print("prefix", action_text)
         #print("suffix", action_text)
-        
-        # plot
+        #set_trace()
+
+        plot = False
         if plot:
+            curve_2d = project_points(camera, curve_3d)
+            curve_2d_short = clip_and_interpolate(curve_2d, camera)
+
             # get after image
             env.render()
             images = env.base_env.scene.get_human_render_camera_images('render_camera')
-            image_after = images['render_camera'][env_id].numpy()
+            image_after = images['render_camera'][env_idx].numpy()
 
             fig, axs = plt.subplots(1, 2)
             axs[0].imshow(image_before)
             axs[1].imshow(image_after)
             #[x.axis('off') for x in axs]
 
-            x, y = curve_2d[env_id, :, 0].tolist(), curve_2d[env_id, :, 1].tolist()
+            x, y = curve_2d[env_idx, :, 0].tolist(), curve_2d[env_idx, :, 1].tolist()
             plot_gradient_curve(axs[0], x, y)
-            axs[0].plot(curve_2d_short[env_id,:,0], curve_2d_short[env_id, :,1],'.-')
+            axs[0].plot(curve_2d_short[env_idx,:,0], curve_2d_short[env_idx, :,1],'.-')
 
             fig.text(.05,.1, "^ "+action_text)
             plt.tight_layout()
             plt.show()
-        
-        run_policy = True
-        from mani_skill.examples.motionplanning.panda.solutions import solveStackCube
-        solve = solveStackCube
-        if run_policy:
-            #try:
-            res = solve(env, seed=args.seed[0], debug=False, vis=True)
-            #except Exception as e:
-            #    print(f"Cannot find valid solution because of an error in motion planning solution: {e}")
-            #    res = -1
+
+        if args.record_dir:
+            env.flush_trajectory(save=True)
+            env.flush_video(name=new_traj_name, save=True)
 
         # roll dice
         reset_random(args, force=True)
-        #print("done.")
-
-        #yield image_before, action_text, traj_token_str, args.seed[0]
+        #yield image_before, json_dict, args.seed[0]
 
     env.close()
 
@@ -213,12 +318,12 @@ def save_dataset(sample_generator, N: int, dataset_path):
 
     annotations = []
     for i in tqdm(range(N)):
-        image_before, action_text, traj_token_str, rnd_seed = next(sample_generator)
+        image_before, json_dict, rnd_seed = next(sample_generator)
         sample_name = str(rnd_seed).zfill(10)
         image_filename = f"CLEVR_{sample_name}.jpg"
-        json_label = dict(image=image_filename, prefix=action_text, suffix=traj_token_str)
+        json_dict["image"] = image_filename
         save_image_async(image_before, dataset_path / image_filename)
-        annotations.append(json_label)
+        annotations.append(json_dict)
         if i % 100 == 0:
             save_labels(annotations)
             annotations = []
@@ -233,5 +338,5 @@ if __name__ == "__main__":
 
     #Important: in order to save dataset uncomment the yeild line in the main function.
     # python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array"
-    #10000/0.8
-    #save_dataset(main(parsed_args, plot=False), N=int(100), dataset_path=Path("/tmp/clevr-act-2/dataset"))
+    #N_samples = 100000/0.8
+    #save_dataset(main(parsed_args, plot=False), N=int(N_samples), dataset_path=Path("/tmp/clevr-act-2/dataset"))

@@ -6,6 +6,7 @@ from typing import Any, Dict, Union
 import numpy as np
 import torch
 
+from mani_skill import ASSET_DIR
 from mani_skill.agents.robots import Fetch, Panda
 from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.envs.utils import randomization
@@ -24,12 +25,11 @@ class StackCubeEnv(BaseEnv):
     SUPPORTED_ROBOTS = ["panda_wristcam", "panda", "fetch"]
     agent: Union[Panda, Fetch]
 
+    # Geometric sahpes, inspired by CLEVR
     shapes = {"cube":actors.build_cube, "sphere":actors.build_sphere} # "cylinder":actors.build_cylinder}
     colors = {"gray": [87, 87, 87],  "red": [173, 35, 35], "blue": [42, 75, 215], "green": [29, 105, 20],
                 "brown": [129, 74, 25], "purple": [129, 38, 192], "cyan": [41, 208, 208], "yellow": [255, 238, 51]}
     sizes = {"large": 0.7/10./2., "small": 0.35/10./2.}
-
-
 
     def __init__(
         self, *args, robot_uids="panda_wristcam", robot_init_qpos_noise=0.02, **kwargs
@@ -111,7 +111,17 @@ class StackCubeEnv(BaseEnv):
                 shape.set_pose(Pose.create_from_pq(p=xyz.clone(), q=qs))
 
 
+    def set_goal_pose(self, objA_goal_pose):
+        self.objA_goal_pose = objA_goal_pose
+        self.objA_p_dist_inital = torch.linalg.norm(self.cubeB.pose.p - objA_goal_pose.p, axis=1)
 
+    def eval_reward(self):
+        objA_pose = self.cubeA.pose.p
+        objB_to_goal_dist = torch.linalg.norm(objA_pose - self.objA_goal_pose.p, axis=1)
+        reward = torch.clamp(1 - objB_to_goal_dist / self.objA_p_dist_inital, 0, 1)
+        return reward
+        
+    # This is the old code below. It is not used in the current implementation.
     def evaluate(self):
         pos_A = self.cubeA.pose.p
         pos_B = self.cubeB.pose.p

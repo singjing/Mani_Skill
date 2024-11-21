@@ -25,6 +25,7 @@ def create_text_names(env):
 #     object.set_pose(pose)
 
 def move_object_onto(env, randomize_text=False, pretend=False):
+    # Move cubeA onto cubeB
     objects = env.base_env.objects
     assert len(objects) >= 2
     object_id_move, object_id_base = np.random.choice(range(len(objects)), 2, replace=False)
