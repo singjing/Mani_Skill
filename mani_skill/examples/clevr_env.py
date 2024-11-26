@@ -27,20 +27,23 @@ class StackCubeEnv(BaseEnv):
     agent: Union[Panda, Fetch]
 
     # Geometric sahpes, inspired by CLEVR
-    shapes = {"cube":actors.build_cube, "sphere":actors.build_sphere} # "cylinder":actors.build_cylinder}
-    colors = {"gray": [87, 87, 87],  "red": [173, 35, 35], "blue": [42, 75, 215], "green": [29, 105, 20],
-                "brown": [129, 74, 25], "purple": [129, 38, 192], "cyan": [41, 208, 208], "yellow": [255, 238, 51]}
+    shapes = {"sphere":actors.build_sphere, "cube":actors.build_cube } # "cylinder":actors.build_cylinder}
+    colors = {"gray": [87, 87, 87],  "red": [173, 35, 35], "blue": [42, 75, 215], "green": [29, 105, 20], "brown": [129, 74, 25], "purple": [129, 38, 192], "cyan": [41, 208, 208], "yellow": [255, 238, 51]}
     sizes = {"large": 0.7/10./2., "small": 0.35/10./2.}
 
     def __init__(
         self, *args, robot_uids="panda_wristcam", robot_init_qpos_noise=0.02, **kwargs
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
-        self.ycb_model_ids = np.array(
-            list(
-                load_json(ASSET_DIR / "assets/mani_skill2_ycb/info_pick_v0.json").keys()
+        try:
+            self.ycb_model_ids = np.array(
+                list(
+                    load_json(ASSET_DIR / "assets/mani_skill2_ycb/info_pick_v0.json").keys()
+                )
             )
-        )
+        except:
+            print('Warning YCB objects not found, try: python -m mani_skill.examples.demo_random_action -e "PickSingleYCB-v1" --render-mode="human"')
+            self.ycb_model_ids = np.array(())
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
     @property
@@ -58,30 +61,41 @@ class StackCubeEnv(BaseEnv):
         pose = sapien_utils.look_at(new_p, end_p)
         return CameraConfig("render_camera", pose, 448, 448, 1, 0.01, 100)
 
-    def _load_scene_clevr(self, num_objects):
-        # create random shapes
-        shapes_choice = randomization.uniform(0.0, float(len(self.shapes)),size=(num_objects,)).cpu().numpy().astype(int)
-        colors_choice = randomization.uniform(0.0, float(len(self.colors)),size=(num_objects,)).cpu().numpy().astype(int)
-        sizes_choice = randomization.uniform(0.0, float(len(self.sizes)),size=(num_objects,)).cpu().numpy().astype(int)
+    def _load_scene_clevr(self, num_objects, min_unique=2, max_attempts=100):
+        # Make sure that there are at least min_unique unique (non-duplicate) objects
+        for _ in range(max_attempts):
+            shapes_choice = randomization.uniform(0.0, float(len(self.shapes)),size=(num_objects,)).cpu().numpy().astype(int)
+            colors_choice = randomization.uniform(0.0, float(len(self.colors)),size=(num_objects,)).cpu().numpy().astype(int)
+            sizes_choice = randomization.uniform(0.0, float(len(self.sizes)),size=(num_objects,)).cpu().numpy().astype(int)
+            shape_array = np.array((shapes_choice, colors_choice, sizes_choice)).T
+            unique, counts = np.unique(shape_array, axis=0, return_counts=True)
+            if np.sum(counts==1) >= min_unique:
+                break
+        if np.sum(counts==1) < min_unique:
+            print(f"Failed to sample {min_unique} unique objects after {max_attempts} attempts.") 
+        # NumPy arrays don't handle element-wise comparisons with the Python in operator directly when comparing arrays.
+        # so do this as tuples
+        unique_set = set(map(tuple, unique[np.where(counts==1)[0]]))
+        self.objects_unique = [tuple(row) in unique_set for row in shape_array]
 
         self.objects = []
         self.objects_descr = []
         for i in range(num_objects):
-            build_function = list(self.shapes.values())[shapes_choice[i]]
-            shape_name = list(self.shapes.keys())[shapes_choice[i]]
-            color = list(self.colors.values())[colors_choice[i]]
-            color = list(np.array(color)/255.)
-            size = list(self.sizes.values())[sizes_choice[i]]
-            tmp = build_function(self.scene, size, color=color + [1,], name=f"{shape_name}_{i}")
+            shape_name, build_function = list(self.shapes.items())[shapes_choice[i]]
+            color_name, color = list(self.colors.items())[colors_choice[i]]
+            size_name, size = list(self.sizes.items())[sizes_choice[i]]
+            color = list(np.array(color + [255.,])/255.)
+            tmp = build_function(self.scene, size, color=color, name=f"{shape_name}_{i}")
             self.objects.append(tmp)
             # now do text description
-            descr = dict(shape=list(self.shapes.keys())[shapes_choice[i]],
-                         size=list(self.sizes.keys())[sizes_choice[i]],
-                         color=list(self.colors.keys())[colors_choice[i]])
+            descr = dict(shape=shape_name,
+                         size=size_name, 
+                         color=color_name)
             self.objects_descr.append(descr)
-
+    
     def _load_scene_ycb(self, num_objects):
         model_ids = randomization.uniform(0.0, float(len(self.ycb_model_ids)),size=(num_objects,)).cpu().numpy().astype(int)
+        model_ids = [2, 2]  # TODO(max): fix grasping, also 4
         for i, model_idx in enumerate(model_ids):
             model_id = self.ycb_model_ids[model_idx]
             #model_id = "043_phillips_screwdriver"
@@ -91,9 +105,15 @@ class StackCubeEnv(BaseEnv):
                 id=f"ycb:{model_id}",
             )
             #builder.set_scene_idxs([i])
+            model_name = " ".join(model_id.split("_")[1:])
             self.objects.append(builder.build(name=f"{model_id}-{i}"))
-            self.objects_descr.append(dict(size="small", color="", shape="model_id"))
-    
+            self.objects_descr.append(dict(size="", color="", shape=model_name))
+
+        # save if objects are unique
+        unique_vals, counts = np.unique(model_ids, return_counts=True)
+        count_dict = dict(zip(unique_vals, counts))
+        self.objects_unique = [count_dict[num] == 1 for num in model_ids]
+
     def _load_scene(self, options: dict):
         self.cube_half_size = common.to_tensor([0.02] * 3)
         self.table_scene = TableSceneBuilder(
@@ -108,8 +128,8 @@ class StackCubeEnv(BaseEnv):
         
         self.objects = []
         self.objects_descr = []
-        self._load_scene_ycb(num_objects)
-        #self._load_scene_clevr(num_objects)
+        #self._load_scene_ycb(num_objects)
+        self._load_scene_clevr(num_objects)
 
         self.cubeA = self.objects[0]  
         self.cubeB = self.objects[1]
@@ -129,7 +149,8 @@ class StackCubeEnv(BaseEnv):
             for shape, descr in zip(self.objects, self.objects_descr):
                 shape_xy = xy + sampler.sample(radius, max_trials=100)
                 xyz[:, :2] = shape_xy
-                xyz[:, 2] = self.sizes[descr["size"]]
+                #xyz[:, 2] = self.sizes[descr["size"]]
+                #xyz[:, 2] = 0
                 qs = randomization.random_quaternions(
                     b,
                     lock_x=True,

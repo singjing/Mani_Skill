@@ -198,6 +198,18 @@ def clip_and_interpolate(curve_2d, camera, num_points=None):
         return torch.tensor(curve2d_short)
     return curve_2d_clip
 
+from scipy.spatial.transform import Rotation as R
+
+
+def are_orns_close(orns_3d, orns_3d_est, tol_degrees=0.4, return_max_diff=False):
+    orns_R = R.from_quat(orns_3d.view(-1,4), scalar_first=True)
+    orns_est_R = R.from_quat(orns_3d_est.view(-1,4), scalar_first=True)
+    magnitude_radians = torch.tensor((orns_est_R * orns_R.inv()).magnitude()).float()
+    angle_degrees = magnitude_radians * (180.0 / torch.pi)
+    all_close = torch.allclose(angle_degrees, torch.zeros_like(angle_degrees), atol=tol_degrees)
+    if return_max_diff:
+        return all_close, angle_degrees.max()
+    return all_close
 
 def check_project_unproject():
     camera_extrinsic = [[[-0.759, 0.651, 0.0, 0.0], [0.301, 0.351, -0.887, 0.106], [-0.577, -0.673, -0.462, 0.575]]]

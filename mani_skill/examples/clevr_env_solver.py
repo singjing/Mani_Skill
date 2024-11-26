@@ -10,18 +10,17 @@ from mani_skill.examples.motionplanning.panda.motionplanner import \
     PandaArmMotionPlanningSolver
 from mani_skill.examples.motionplanning.panda.utils import (
     compute_grasp_info_by_obb, get_actor_obb)
+from scipy.spatial.transform import Rotation as R
 
+def object_is_rotationally_invariant(obj):
+    if obj.name.startswith("sphere"):
+        return True
+    return False
 
-def solve(env: StackCubeEnv, seed=None, debug=False, vis=False, dry_run=False):
-    env.reset(seed=seed)
-    assert env.unwrapped.control_mode in [
-        "pd_joint_pos",
-        "pd_joint_pos_vel",
-    ], env.unwrapped.control_mode
+def get_grasp_pose_and_obb(env: StackCubeEnv):
     FINGER_LENGTH = 0.025
     env = env.unwrapped
     obb = get_actor_obb(env.cubeA)
-
     approaching = np.array([0, 0, -1])
     target_closing = env.agent.tcp.pose.to_transformation_matrix()[0, :3, 1].numpy()
     grasp_info = compute_grasp_info_by_obb(
@@ -33,7 +32,18 @@ def solve(env: StackCubeEnv, seed=None, debug=False, vis=False, dry_run=False):
     closing, center = grasp_info["closing"], grasp_info["center"]
     grasp_pose = env.agent.build_grasp_pose(approaching, closing, center)
 
-    # # Search a valid pose
+    if object_is_rotationally_invariant(env.cubeA):
+        # keep this simple for now
+        grasp_pose.set_q(env.agent.tcp.pose.get_q()[0])
+        #rot_initial = R.from_quat(env.agent.tcp.pose.get_q()[0].numpy(), scalar_first=True)
+        #rot_initial_z = rot_initial.as_euler('xyz', degrees=True)[2]
+        #rot_grasp = R.from_quat(grasp_pose.get_q(), scalar_first=True)
+        #rot_grasp_xy = rot_grasp.as_euler('xyz', degrees=True)[:2].tolist()
+        #rot_grasp_new = R.from_euler('xyz', rot_grasp_xy + [rot_initial_z], degrees=True) 
+        #json_dict['traj_q'][0] = rot_grasp_new.as_quat(scalar_first=True).tolist()  # json serializable
+
+
+    # Search a valid pose
     # angles = np.arange(0, np.pi * 2 / 3, np.pi / 2)
     # angles = np.repeat(angles, 2)
     # angles[1::2] *= -1
@@ -48,14 +58,26 @@ def solve(env: StackCubeEnv, seed=None, debug=False, vis=False, dry_run=False):
     # else:
     #     print("Fail to find a valid grasp pose")
 
+    #print(env.cube_half_size[2]*2, obb.primitive.extents[2]/2)
+
     #from pdb import set_trace
     #set_trace()
-    #print(env.cube_half_size[2]*2, obb.primitive.extents[2]/2)
-    reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
+    return grasp_pose, obb
+
+def solve(env: StackCubeEnv, seed=None, debug=False, vis=False, dry_run=False):
+    env.reset(seed=seed)
+    assert env.unwrapped.control_mode in [
+        "pd_joint_pos",
+        "pd_joint_pos_vel",
+    ], env.unwrapped.control_mode
+
+    grasp_pose, obb = get_grasp_pose_and_obb(env)
+    env = env.unwrapped
+    reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])    
     lift_pose = sapien.Pose([0, 0, 0.1]) * grasp_pose
     height = env.cube_half_size[2] * 2
     height = obb.primitive.extents[2]/2 + get_actor_obb(env.cubeB).primitive.extents[2]/2 + 0.001
-    height = 0
+#    height = 0
     goal_pose = env.cubeB.pose * sapien.Pose([0, 0, height])
     offset = (goal_pose.p - env.cubeA.pose.p).numpy()[0] # remember that all data in ManiSkill is batched and a torch tensor
     align_pose = sapien.Pose(lift_pose.p + offset, lift_pose.q)

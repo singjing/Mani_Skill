@@ -38,8 +38,8 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
     with open(json_file, "r") as file:
         lines = file.readlines()
 
-    depths = []
-    rots = []
+    rots_e = []
+    rots_r = []
     new_lines = []
     refered_files = []    
     for i, line in tqdm(enumerate(lines[:LIMIT_LINES]), total=len(lines)):
@@ -55,10 +55,53 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
         refered_files.append(label["image"])
 
         camera = DummyCamera(label["camera_intrinsic"], label["camera_extrinsic"])
-        start_pose = Pose(raw_pose=torch.tensor(label["start_pose"]))
-        end_pose = Pose(raw_pose=torch.tensor(label["end_pose"]))
-        _, curve_3d = generate_curve_torch(start_pose.get_p(), end_pose.get_p(), num_points=2)
-        curve_2d, depth, curve_tokens = encode_trajectory_xyz(curve_3d, camera)
+        obj_start_pose = Pose(raw_pose=torch.tensor(label["obj_start_pose"]))
+        obj_end_pose = Pose(raw_pose=torch.tensor(label["obj_end_pose"]))
+
+        encoding = "xyzrotvec"
+        if encoding == "xyz":
+            _, curve_3d = generate_curve_torch(obj_start_pose.get_p(), obj_end_pose.get_p(), num_points=2)
+            curve_2d, depth, curve_tokens = encode_trajectory_xyz(curve_3d, camera)
+        elif encoding == "xyzr":
+            _, curve_3d = generate_curve_torch(obj_start_pose.get_p(), obj_end_pose.get_p(), num_points=2)
+            curve_2d, depth, curve_tokens = encode_trajectory_xyz(curve_3d, camera)
+
+        elif encoding == "xyzrotvec":
+            from utils_traj_tokens import encode_trajectory_xyzrotvec, decode_trajectory_xyzrotvec
+            from utils_trajectory import are_orns_close
+            _, curve_3d = generate_curve_torch(obj_start_pose.get_p(), obj_end_pose.get_p(), num_points=2)
+            # get rotation
+            grasp_pose = Pose(raw_pose=torch.tensor(label["grasp_pose"]))
+            orns_3d = torch.tensor(grasp_pose.get_q())
+            orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
+
+            # now encode
+            curve_2d, depth, curve_tokens = encode_trajectory_xyzrotvec(curve_3d, orns_3d, camera)
+            curve_3d_est, orns_3d_est = decode_trajectory_xyzrotvec(curve_tokens, camera)
+
+            check_encode_decode = False
+            if check_encode_decode:
+                if not torch.allclose(curve_3d, curve_3d_est, atol=.005):
+                    print("pos diff[m]", (curve_3d-curve_3d_est).abs().max())
+                angles_close, max_angle =  are_orns_close(orns_3d, orns_3d_est, return_max_diff=True)
+                if not angles_close:
+                    print("angle diff[deg]", max_angle)
+                
+            # collect rotvec stats
+            collect_rotvec_stats = False
+            if collect_rotvec_stats:
+                extrinsic_orn = R.from_matrix(camera.get_extrinsic_matrix()[:, :3, :3])
+                extrinsic = Pose.create_from_pq(p=camera.get_extrinsic_matrix()[:, :3, 3],
+                                                q=extrinsic_orn.as_quat(scalar_first=True))
+                graps_pose_c = extrinsic * grasp_pose
+                grap_pose_cR = R.from_quat(graps_pose_c.get_q(), scalar_first=True)
+                rot_r = grap_pose_cR.as_rotvec()
+                rot_e = grap_pose_cR.as_euler('xyz', degrees=True)
+                rots_r.append(rot_r)
+                rots_e.append(rot_e)
+            curve_tokens = ""
+        else:
+            raise ValueError(f"Unknown encoding: {encoding}")
 
         new_label = dict(image=label["image"], prefix=label["prefix"], suffix=curve_tokens)
         new_line = json.dumps(new_label) + "\n"
@@ -127,5 +170,5 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
     print("done.")
 
 if __name__ == "__main__":
-    dataset_path = Path("/tmp/clevr-act-2/dataset")
+    dataset_path = Path("/tmp/clevr-act-5/dataset")
     split_dataset(dataset_path)

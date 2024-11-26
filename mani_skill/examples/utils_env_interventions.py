@@ -29,12 +29,17 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     # Move cubeA onto cubeB
     objects = env.base_env.objects
     assert len(objects) >= 2
-    object_id_move, object_id_base = np.random.choice(range(len(objects)), 2, replace=False)
+    options = np.where(env.base_env.objects_unique)[0]
+    if len(options) >= 2:
+        object_id_move, object_id_base = np.random.choice(options, 2, replace=False)
+    else:
+        print("Warning: not enough unique objects")
+        object_id_move, object_id_base = np.random.choice(range(len(objects)), 2, replace=False)
     pose_base = objects[object_id_base].pose
-    start_pose = objects[object_id_move].pose
+    obj_start_pose = objects[object_id_move].pose
     # Pose.create creates a reference
-    end_pose = Pose.create_from_pq(p=start_pose.get_p(), q=start_pose.get_q())    
-    pos_new = start_pose.get_p().clone().detach()  # don't forget
+    obj_end_pose = Pose.create_from_pq(p=obj_start_pose.get_p(), q=obj_start_pose.get_q())    
+    pos_new = obj_start_pose.get_p().clone().detach()  # don't forget
     pos_base = pose_base.get_p()
     pos_new[:, 0:2] = pos_base[:, 0:2]
     
@@ -47,10 +52,10 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     old_height = pos_new[:, 2] + 2*pos_base[:, 2]
     #print(">>>", old_height, height)
     pos_new[:, 2] = height
-    end_pose.set_p(pos_new)
+    obj_end_pose.set_p(pos_new)
 
     if not pretend:
-        objects[object_id_move].set_pose(end_pose)
+        objects[object_id_move].set_pose(obj_end_pose)
     
     env.base_env.cubeA = objects[object_id_move]
     env.base_env.cubeB = objects[object_id_base]
@@ -66,7 +71,7 @@ def move_object_onto(env, randomize_text=False, pretend=False):
         verb = verbs[0]
         prep = prepositions[0]
     action_text = f"{verb} {text_names[object_id_move]} {prep} {text_names[object_id_base]}"
-    return start_pose, end_pose, action_text
+    return obj_start_pose, obj_end_pose, action_text
 
 
 # TODO(shardul):

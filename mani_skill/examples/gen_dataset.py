@@ -1,9 +1,9 @@
 """
 Option 1: record inital frames:
-python gen_dataset.py -e "ClevrMove-v1"   --render-mode="rgb_array" 
+python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array" 
 
 Option 2: record trajectories
-python gen_dataset.py -e "ClevrMove-v1"   --render-mode="rgb_array" -c "pd_joint_pos"
+python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array" -c "pd_joint_pos"
 """
 import gymnasium as gym
 import numpy as np
@@ -17,6 +17,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 from tqdm import tqdm
+from scipy.spatial.transform import Rotation as R
 
 import tyro
 from dataclasses import dataclass
@@ -24,12 +25,13 @@ from typing import List, Optional, Annotated, Union
 
 from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.utils.wrappers import RecordEpisode
-
-import clevr_env  # to register env, not used otherwise
+from mani_skill.utils.structs import Pose
+        
+import clevr_env  # do import to register env, not used otherwise
+from clevr_env_solver import get_grasp_pose_and_obb
 from utils_env_interventions import move_object_onto
 from utils_trajectory import project_points, generate_curve_torch, plot_gradient_curve
 from utils_trajectory import clip_and_interpolate
-from utils_traj_tokens import encode_trajectory_xy, encode_trajectory_xyz
 
 from pdb import set_trace
 
@@ -81,43 +83,6 @@ def reset_random(args, force=True):
     np.random.seed(args.seed[0])
 
 
-def save_solve_policy_to_json(env, args, camera, json_dict, vis):
-    #from mani_skill.examples.motionplanning.panda.solutions import solveStackCube
-    #solve = solveStackCube
-    from clevr_env_solver import solve
-    #try:
-    res = solve(env, seed=args.seed[0], debug=False, vis=vis, dry_run=True)
-    #except Exception as e:
-    #    print(f"Cannot find valid solution because of an error in motion planning solution: {e}")
-    #    res = -1
-
-    traj_poses_3d = []
-    traj_orns_3d = []
-    traj_gripper = []
-    for wp in res:
-        if isinstance(wp, sapien.Pose):
-            traj_poses_3d.append(wp.get_p())
-            traj_orns_3d.append(wp.get_q())
-        elif wp == "close_gripper" or wp == "open_gripper":
-            gripper_act = 0 if wp == "close_gripper" else 1
-            gripper_act_n = 1 if wp == "close_gripper" else 0
-            if traj_gripper == []:
-                traj_gripper.extend([gripper_act_n]*(len(traj_poses_3d)-1))
-                traj_gripper.append(gripper_act)
-            else:
-                traj_gripper.extend([traj_gripper[-1]]*(len(traj_poses_3d)-len(traj_gripper)-1))
-                traj_gripper.append(gripper_act)
-
-    traj_poses_3d = np.array(traj_poses_3d).tolist()
-    traj_orns_3d = np.array(traj_orns_3d).tolist()
-    traj_gripper = np.array(traj_gripper).tolist()
-    scene_data = dict(traj_p=traj_poses_3d, traj_q=traj_orns_3d, traj_g=traj_gripper)
-    json_dict.update(scene_data)          
-
-    # plot the trajectory
-    # curve_2d = project_points(camera, torch.tensor([traj_poses_3d]))
-    # x, y = curve_2d[env_idx, :, 0].tolist(), curve_2d[env_idx, :, 1].tolist()
-    # plot_gradient_curve(axs[0], x, y)
 
 def main(args: Args, plot=True):
     np.set_printoptions(suppress=True, precision=3)
@@ -129,6 +94,7 @@ def main(args: Args, plot=True):
         parallel_in_single_scene = False
     if args.render_mode == "human" and args.num_envs == 1:
         parallel_in_single_scene = False
+
     env: BaseEnv = gym.make(
         args.env_id,
         obs_mode=args.obs_mode,
@@ -180,110 +146,79 @@ def main(args: Args, plot=True):
         image_before = images['render_camera'][env_idx].numpy()
 
         # do intervention ( this will set env.base_env.cubeA / cubeB)
-        start_pose, end_pose, action_text = move_object_onto(env, pretend=True)
-        env.unwrapped.set_goal_pose(end_pose)
-        
+        obj_start, obj_end, action_text = move_object_onto(env, pretend=True)
+        env.unwrapped.set_goal_pose(obj_end)
+        from mani_skill.utils.structs import Pose
+        grasp_pose_sapien, _ = get_grasp_pose_and_obb(env)
+        # sapien to mani_skill
+        grasp_pose = Pose.create_from_pq(p=grasp_pose_sapien.get_p(), q=grasp_pose_sapien.get_q())
+
         # convert to default trajectory
         camera = env.base_env.scene.human_render_cameras['render_camera'].camera
-        _, curve_3d = generate_curve_torch(start_pose.get_p(), end_pose.get_p())
-        traj_token_str = encode_trajectory_xy(curve_3d, camera)
+        
+        # this is the orignal encoding
+        #_, curve_3d = generate_curve_torch(obj_start.get_p(), obj_end.get_p())
+        #token_str = encode_trajectory_xy(curve_3d, camera)
 
-        json_dict = dict(prefix=action_text, suffix=traj_token_str,
+        _, curve_3d = generate_curve_torch(obj_start.get_p(), obj_end.get_p(), num_points=2)
+        orns_3d = grasp_pose.get_q().clone().detach()  # get rotation
+        orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
+        from utils_traj_tokens import encode_trajectory_xyzrotvec, decode_trajectory_xyzrotvec
+        curve_25d, depth, token_str = encode_trajectory_xyzrotvec(curve_3d, orns_3d, camera)
+
+        # encode tcp position
+        tcp_pose = env.unwrapped.agent.tcp.pose
+        _, _, tcp_str = encode_trajectory_xyzrotvec(tcp_pose.get_p().unsqueeze(0), tcp_pose.get_q().unsqueeze(0), camera)   
+        
+        json_dict = dict(prefix=action_text+tcp_str, suffix=token_str,
+                         action_text=action_text,
                          camera_extrinsic=camera.get_extrinsic_matrix().detach().numpy().tolist(),
                          camera_intrinsic=camera.get_intrinsic_matrix().detach().numpy().tolist(),
-                         start_pose=start_pose.raw_pose.detach().numpy().tolist(),
-                         end_pose=end_pose.raw_pose.detach().numpy().tolist())
-        
-        # note: this runs clevr_env_solver, but goal position is coming from move_object_onto
-        save_solve_policy_to_json(env, args, camera, json_dict, vis)
-
-        if action_text.split()[3] == "sphere":
-            # TODO(max): Find a good angle to do grasp
-            from scipy.spatial.transform import Rotation as R
-            from mani_skill.utils.structs.pose import Pose
-            rot = R.from_matrix(env.unwrapped.agent.tcp.pose.to_transformation_matrix()[0, :3, :3].numpy())
-            rot2 = R.from_matrix(Pose.create_from_pq(p=None, q=torch.tensor(json_dict['traj_q'][0])).to_transformation_matrix()[0, :3, :3].numpy())
-            
-            # print(env.unwrapped.agent.tcp.pose.get_q()[0])
-            # print(torch.tensor(json_dict['traj_q'][0]))
-            # print(rot.as_euler('xyz', degrees=True))
-            # print(rot2.as_euler('xyz', degrees=True))
-            #set_trace()
-
-        
-        _, curve_3d = generate_curve_torch(start_pose.get_p(), end_pose.get_p(), num_points=2)
-        orns_3d = torch.tensor(json_dict['traj_q'][0])
-        orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
+                         obj_start_pose=obj_start.raw_pose.detach().numpy().tolist(),
+                         obj_end_pose=obj_end.raw_pose.detach().numpy().tolist(),
+                         tcp_start_pose=env.unwrapped.agent.tcp.pose.raw_pose.detach().numpy().tolist(),
+                         grasp_pose=grasp_pose.raw_pose.detach().numpy().tolist())
         
         encode_decode_trajectory = False
         if encode_decode_trajectory:
-            # Option 2: encode trajectory as xyz
-            from utils_traj_tokens import parse_trajectory_xyz
-            from utils_trajectory import unproject_points
-            curve_25d, depth, token_str = encode_trajectory_xyz(curve_3d, camera)
-            curve_25d = parse_trajectory_xyz(token_str, camera, num_tokens=3)
-            curve_3d_est = unproject_points(camera, curve_25d) 
-            curve_3d = curve_3d_est # set the unparsed trajectory one used for policy
+            from utils_traj_tokens import encode_trajectory_xyzrotvec, decode_trajectory_xyzrotvec
+            #curve_25d, depth, token_str = encode_trajectory_xyzrotvec(curve_3d, orns_3d, camera)
+            curve_3d_est, orns_3d_est = decode_trajectory_xyzrotvec(token_str, camera)
+            curve_3d = curve_3d_est  # set the unparsed trajectory one used for policy
+            orns_3d = orns_3d_est
 
         # Evaluate the trajectory
-        from mani_skill.utils.structs import Pose
-        from mani_skill.examples.motionplanning.panda.motionplanner import \
-            PandaArmMotionPlanningSolver
-        
-        #set_trace()
-        _, curve_3d_i = generate_curve_torch(start_pose.get_p(), end_pose.get_p(), num_points=3)
-        #orn = env.unwrapped.agent.tcp.pose.get_q()
-        grasp_pose = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
-        reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
-        lift_pose = Pose.create_from_pq(p=curve_3d_i[:, 1], q=orns_3d[:, 1])
-        align_pose = Pose.create_from_pq(p=curve_3d_i[:, 2], q=orns_3d[:, 1])
+        eval_trajectory = True
+        if eval_trajectory:
+            from mani_skill.examples.motionplanning.panda.motionplanner import \
+                PandaArmMotionPlanningSolver
+            
+            assert curve_3d.shape[1] == 2 and orns_3d.shape[1] == 2  # start and stop poses
+            _, curve_3d_i = generate_curve_torch(curve_3d[:, 0], curve_3d[:, -1], num_points=3)
+            grasp_pose_sapien = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
+            reach_pose = grasp_pose_sapien * sapien.Pose([0, 0, -0.05])
+            lift_pose = Pose.create_from_pq(p=curve_3d_i[:, 1], q=orns_3d[:, 1])
+            align_pose = Pose.create_from_pq(p=curve_3d_i[:, 2], q=orns_3d[:, 1])
 
-        planner = PandaArmMotionPlanningSolver(
-            env,
-            debug=False,
-            vis=vis,
-            base_pose=env.unwrapped.agent.robot.pose,
-            visualize_target_grasp_pose=vis,
-            print_env_info=False,
-        )
-        planner.move_to_pose_with_screw(reach_pose)
-        planner.move_to_pose_with_screw(grasp_pose)
-        planner.close_gripper()
-        planner.move_to_pose_with_screw(lift_pose)
-        planner.move_to_pose_with_screw(align_pose)
-        res = planner.open_gripper()
-        print("reward", env.unwrapped.eval_reward())
-        planner.close()
+            planner = PandaArmMotionPlanningSolver(
+                env,
+                debug=False,
+                vis=vis,
+                base_pose=env.unwrapped.agent.robot.pose,
+                visualize_target_grasp_pose=vis,
+                print_env_info=False,
+            )
+            planner.move_to_pose_with_screw(reach_pose)
+            planner.move_to_pose_with_screw(grasp_pose_sapien)
+            planner.close_gripper()
+            planner.move_to_pose_with_screw(lift_pose)
+            planner.move_to_pose_with_screw(align_pose)
+            res = planner.open_gripper()
+            print("reward", env.unwrapped.eval_reward())
+            planner.close()
 
-        #set_trace()
-
-        #curve_3d_parse = decode_trajectory_xyz(traj_xyz_str, camera)
-        #print("prefix", action_text)
-        #print("suffix", action_text)
-        #set_trace()
-
-        plot = False
-        if plot:
-            curve_2d = project_points(camera, curve_3d)
-            curve_2d_short = clip_and_interpolate(curve_2d, camera)
-
-            # get after image
-            env.render()
-            images = env.base_env.scene.get_human_render_camera_images('render_camera')
-            image_after = images['render_camera'][env_idx].numpy()
-
-            fig, axs = plt.subplots(1, 2)
-            axs[0].imshow(image_before)
-            axs[1].imshow(image_after)
-            #[x.axis('off') for x in axs]
-
-            x, y = curve_2d[env_idx, :, 0].tolist(), curve_2d[env_idx, :, 1].tolist()
-            plot_gradient_curve(axs[0], x, y)
-            axs[0].plot(curve_2d_short[env_idx,:,0], curve_2d_short[env_idx, :,1],'.-')
-
-            fig.text(.05,.1, "^ "+action_text)
-            plt.tight_layout()
-            plt.show()
+        #test_angles(env, camera)
+        #plot_curve(env, curve_3d, camera, env_idx, action_text, image_before)
 
         if args.record_dir:
             env.flush_trajectory(save=True)
@@ -294,6 +229,79 @@ def main(args: Args, plot=True):
         #yield image_before, json_dict, args.seed[0]
 
     env.close()
+
+
+def plot_curve(env, curve_3d, camera, env_idx, action_text, image_before):
+    curve_2d = project_points(camera, curve_3d)
+    curve_2d_short = clip_and_interpolate(curve_2d, camera)
+
+    # get after image
+    env.render()
+    images = env.base_env.scene.get_human_render_camera_images('render_camera')
+    image_after = images['render_camera'][env_idx].numpy()
+
+    fig, axs = plt.subplots(1, 2)
+    axs[0].imshow(image_before)
+    axs[1].imshow(image_after)
+    #[x.axis('off') for x in axs]
+
+    x, y = curve_2d[env_idx, :, 0].tolist(), curve_2d[env_idx, :, 1].tolist()
+    plot_gradient_curve(axs[0], x, y)
+    axs[0].plot(curve_2d_short[env_idx,:,0], curve_2d_short[env_idx, :,1],'.-')
+
+    fig.text(.05,.1, "^ "+action_text)
+    plt.tight_layout()
+    plt.show()
+
+
+def test_angles(env, camera):
+    from mani_skill.utils.structs import Pose
+    from mani_skill.examples.motionplanning.panda.motionplanner import \
+        PandaArmMotionPlanningSolver
+    from mani_skill.utils.structs.pose import to_sapien_pose
+    from mani_skill.utils.structs.pose import to_sapien_pose
+    import time
+    tcp = env.unwrapped.agent.tcp.pose
+
+    vis = True
+    planner = PandaArmMotionPlanningSolver(
+        env,
+        debug=False,
+        vis=vis,
+        base_pose=env.unwrapped.agent.robot.pose,
+        visualize_target_grasp_pose=vis,
+        print_env_info=False,
+    )
+
+    extrinsic_orn = R.from_matrix(camera.get_extrinsic_matrix()[:, :3, :3])
+    extrinsic = Pose.create_from_pq(p=camera.get_extrinsic_matrix()[:, :3, 3],
+                                    q=extrinsic_orn.as_quat(scalar_first=True))
+    # rotate gripper in camera frame
+    for x in range(-60, 60, 1):
+        angle = R.from_euler('xyz', [0, 0, x], degrees=True)
+        pose_c = Pose.create_from_pq(p=[0,0,.3], q=angle.as_quat(scalar_first=True))
+        # pose_c = extrinsic * pose_w
+        pose_w = extrinsic.inv() * pose_c
+        pose_ws = to_sapien_pose(pose_w)
+        planner.grasp_pose_visual.set_pose(pose_ws)
+        planner.render_wait()
+        env.base_env.render_human()
+        print('xxx', angle)
+        #planner.move_to_pose_with_screw(pose)
+        time.sleep(.3)
+
+    # rotate gripper in world frame
+    for angle_z in range(-60, 60, 10):
+        angle = R.from_euler('xyz', [180+angle_z, 0, 0], degrees=True)
+        pose = Pose.create_from_pq(p=tcp.get_p(), q=angle.as_quat(scalar_first=True))
+        planner.move_to_pose_with_screw(pose)
+        time.sleep(.3)
+
+    for angle_y in range(-60, 60, 10):
+        angle = R.from_euler('xyz', [180, angle_y, 0], degrees=True)
+        pose = Pose.create_from_pq(p=tcp.get_p(), q=angle.as_quat(scalar_first=True))
+        planner.move_to_pose_with_screw(pose)
+        time.sleep(.3)
 
 
 def save_dataset(sample_generator, N: int, dataset_path):
@@ -338,7 +346,10 @@ if __name__ == "__main__":
     #Important: in order to save dataset comment the yeild line in the main function.
     main(parsed_args)
 
-    #Important: in order to save dataset uncomment the yeild line in the main function.
     # python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array"
+    #Important: in order to save dataset do the following:
+    # 1. uncomment the yeild line in the main function.
+    # 2. set eval_trajectory = False
+    # 3. set encode_decode_trajectory = False
     #N_samples = 100000/0.8
-    #save_dataset(main(parsed_args, plot=False), N=int(N_samples), dataset_path=Path("/tmp/clevr-act-2/dataset"))
+    #save_dataset(main(parsed_args, plot=False), N=int(N_samples), dataset_path=Path("/tmp/clevr-act-5/dataset"))
