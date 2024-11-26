@@ -326,8 +326,19 @@ def save_dataset(sample_generator, N: int, dataset_path):
                 json.dump(obj, f)
                 f.write("\n")
 
+    def get_num_lines():
+        json_file = dataset_path / "_annotations.all.jsonl"
+        if Path(json_file).exists():
+            with open(json_file) as f:
+                return sum(1 for line in f)
+        else:
+            return 0
+        
+    N_cur = get_num_lines()
+    N_remaining = N - N_cur
+
     annotations = []
-    for i in tqdm(range(N)):
+    for i in tqdm(range(N_remaining)):
         image_before, json_dict, rnd_seed = next(sample_generator)
         sample_name = str(rnd_seed).zfill(10)
         image_filename = f"CLEVR_{sample_name}.jpg"

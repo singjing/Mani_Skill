@@ -35,15 +35,9 @@ class StackCubeEnv(BaseEnv):
         self, *args, robot_uids="panda_wristcam", robot_init_qpos_noise=0.02, **kwargs
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
-        try:
-            self.ycb_model_ids = np.array(
-                list(
-                    load_json(ASSET_DIR / "assets/mani_skill2_ycb/info_pick_v0.json").keys()
-                )
-            )
-        except:
-            print('Warning YCB objects not found, try: python -m mani_skill.examples.demo_random_action -e "PickSingleYCB-v1" --render-mode="human"')
-            self.ycb_model_ids = np.array(())
+
+        self.objaverse_model_ids = None
+        self.ycb_model_ids = None
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
     @property
@@ -94,8 +88,15 @@ class StackCubeEnv(BaseEnv):
             self.objects_descr.append(descr)
     
     def _load_scene_ycb(self, num_objects):
+        if self.ycb_model_ids is None:
+            ycb_file = ASSET_DIR / "assets/mani_skill2_ycb/info_pick_v0.json"
+            try:
+                self.ycb_model_ids = np.array(list(load_json(ycb_file).keys()))
+            except:
+                raise ValueError('Warning YCB objects not found, try: python -m mani_skill.examples.demo_random_action -e "PickSingleYCB-v1" --render-mode="human"')
+                
         model_ids = randomization.uniform(0.0, float(len(self.ycb_model_ids)),size=(num_objects,)).cpu().numpy().astype(int)
-        model_ids = [2, 2]  # TODO(max): fix grasping, also 4
+        #model_ids = [2, 2]  # TODO(max): fix grasping, also 4
         for i, model_idx in enumerate(model_ids):
             model_id = self.ycb_model_ids[model_idx]
             #model_id = "043_phillips_screwdriver"
@@ -114,13 +115,75 @@ class StackCubeEnv(BaseEnv):
         count_dict = dict(zip(unique_vals, counts))
         self.objects_unique = [count_dict[num] == 1 for num in model_ids]
 
+    def _load_scene_objaverse(self, num_objects):
+        num_objects = 2
+        objaverse_folder = (ASSET_DIR / "../../.objaverse/hf-objaverse-v1/").resolve()
+        if not objaverse_folder.exists():
+            print("Warning: objaverse folder not found, download files using objaverse_download.ipynb")
+            raise ValueError
+        
+        from mani_skill.envs.scene import ManiSkillScene
+        def get_objaverse_builder(scene: ManiSkillScene, file: str, add_collision=True, add_visual=True):
+            builder = scene.create_actor_builder()
+            density =  1000
+            model_scales = [1.0]
+            scale = model_scales[0]
+            physical_material = None
+            if add_collision:
+                collision_file = str(file)
+                builder.add_nonconvex_collision_from_file(
+                    filename=collision_file,
+                    scale=[scale] * 3,
+                    material=physical_material,
+                    #density=density,
+                )
+            if add_visual:
+                visual_file = str(file)
+                builder.add_visual_from_file(filename=visual_file, scale=[scale] * 3)
+            return builder
+
+        if self.objaverse_model_ids is None:
+            glb_files = list((objaverse_folder / "glbs").rglob("*.glb"))
+            print(f"Objaverse models found {len(glb_files)}")
+            glb_downloaded = [x.stem for x in glb_files]
+            glb_downloaded_set = set(glb_downloaded)
+            self.objaverse_model_ids = glb_files
+            anno_path = objaverse_folder / "lvis-annotations.json.gz"
+
+            import gzip, json
+            with gzip.open(anno_path, "rt", encoding="utf-8") as f:
+                lvis_annotations = json.load(f)
+            mapping = {}
+            for category, items in lvis_annotations.items():
+                for index, item in enumerate(items, start=1):  # Use 1-based indexing
+                    if item not in glb_downloaded_set:
+                        continue
+                    mapping[f"{category}-{index}"] = glb_files[glb_downloaded.index(item)]
+            self.objaverse_model_ids = list(mapping.keys())
+            self.objaverse_files = mapping
+
+        model_ids = randomization.uniform(0.0, float(len(self.objaverse_model_ids)), size=(num_objects,)).cpu().numpy().astype(int)
+        for i, model_idx in enumerate(model_ids):
+            model_id = self.objaverse_model_ids[model_idx]
+            filename = self.objaverse_files[model_id]
+            builder = get_objaverse_builder(self.scene, filename)
+            self.objects.append(builder.build(name=f"{model_id}-{i}"))
+            self.objects_descr.append(dict(size="", color="", shape=model_id))
+
+            from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
+            print(model_id, get_actor_obb(self.objects[-1]).primitive.extents)
+        
+        unique_vals, counts = np.unique(model_ids, return_counts=True)
+        count_dict = dict(zip(unique_vals, counts))
+        self.objects_unique = [count_dict[num] == 1 for num in model_ids]
+
+
     def _load_scene(self, options: dict):
         self.cube_half_size = common.to_tensor([0.02] * 3)
         self.table_scene = TableSceneBuilder(
             env=self, robot_init_qpos_noise=self.robot_init_qpos_noise
         )
         self.table_scene.build()
-
         min_objects = 2
         max_objects = 5
 
@@ -130,6 +193,7 @@ class StackCubeEnv(BaseEnv):
         self.objects_descr = []
         #self._load_scene_ycb(num_objects)
         self._load_scene_clevr(num_objects)
+        #self._load_scene_objaverse(num_objects)
 
         self.cubeA = self.objects[0]  
         self.cubeB = self.objects[1]

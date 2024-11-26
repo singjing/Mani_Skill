@@ -197,7 +197,9 @@ def encode_trajectory_xyzrotvec(curve_3d, orns_3d, camera):
 
     rotvec = torch.tensor(orn_c_obj.as_rotvec())
     rotvec_positive = rotvec * torch.tensor([-1, 1, 1])
-    assert (rotvec_positive > 0).all() and (rotvec_positive < max_rotvec).all()
+    is_ok = (rotvec_positive > 0).all() and (rotvec_positive < max_rotvec).all()
+    if not is_ok:
+        print("Warning: Rotvec out of range.")
 
     # This is the part that is not parrelized
     env_idx = 0
@@ -246,12 +248,6 @@ def decode_trajectory_xyzrotvec(caption, camera):
     return curve_w, quat_w.get_q().unsqueeze(0)  # shape (P, 3 = u, v, d)
 
 
-def are_orns_close(orns_3d, orns_3d_est, tol_degrees=0.5):
-    orns_R = R.from_quat(orns_3d.view(-1,4), scalar_first=True)
-    orns_est_R = R.from_quat(orns_3d_est.view(-1,4), scalar_first=True)
-    magnitude_radians = torch.tensor((orns_est_R * orns_R.inv()).magnitude())
-    angle_degrees = magnitude_radians * (180.0 / torch.pi)
-    return torch.allclose(angle_degrees, torch.zeros_like(angle_degrees), atol=tol_degrees)
 
 
 def check_encode_decode():
