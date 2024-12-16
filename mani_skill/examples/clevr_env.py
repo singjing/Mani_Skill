@@ -31,6 +31,9 @@ class StackCubeEnv(BaseEnv):
     colors = {"gray": [87, 87, 87],  "red": [173, 35, 35], "blue": [42, 75, 215], "green": [29, 105, 20], "brown": [129, 74, 25], "purple": [129, 38, 192], "cyan": [41, 208, 208], "yellow": [255, 238, 51]}
     sizes = {"large": 0.7/10./2., "small": 0.35/10./2.}
 
+    OBJECT_REGION = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
+
+
     def __init__(
         self, *args, robot_uids="panda_wristcam", robot_init_qpos_noise=0.02, **kwargs
     ):
@@ -46,14 +49,30 @@ class StackCubeEnv(BaseEnv):
         return [CameraConfig("base_camera", pose, 128, 128, np.pi / 2, 0.01, 100)]
 
     @property
-    def _default_human_render_camera_configs(self):
-        # TODO: figure out a good way to calculate this
+    def _default_human_render_camera_configs_fixed(self):
         start_p = [0.6, 0.7, 0.6]
         end_p = [0.0, 0.0, 0.12]
         t = 0.5
         new_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
         pose = sapien_utils.look_at(new_p, end_p)
         return CameraConfig("render_camera", pose, 448, 448, 1, 0.01, 100)
+
+    @property
+    def _default_human_render_camera_configs_random(self):
+        cylinder_c = np.array([.45, 0, .36])
+        cylinder_ext = np.array([.10, np.pi*4/5, .10])
+        cylinder_l = cylinder_c - cylinder_ext
+        cylinder_h = cylinder_c + cylinder_ext
+        r, phi, z = randomization.uniform(cylinder_l, cylinder_h, size=(3,)).cpu().numpy().astype(float)
+        # print(r, phi, z)
+        start_p = [r * np.cos(phi), r * np.sin(phi), z]
+        end_p = randomization.uniform(*zip(*self.OBJECT_REGION),size=(3,)).cpu().numpy().astype(float)
+        pose = sapien_utils.look_at(start_p, end_p)    
+        return CameraConfig("render_camera", pose, 448, 448, 1, 0.01, 100)
+
+    @property
+    def _default_human_render_camera_configs(self):
+        return self._default_human_render_camera_configs_random
 
     def _load_scene_clevr(self, num_objects, min_unique=2, max_attempts=100):
         # Make sure that there are at least min_unique unique (non-duplicate) objects
@@ -206,9 +225,8 @@ class StackCubeEnv(BaseEnv):
             xyz = torch.zeros((b, 3))
             xyz[:, 2] = 0.02
             xy = torch.rand((b, 2)) * 0.2 - 0.1
-            region = [[-0.1, -0.2], [0.1, 0.2]]
 
-            sampler = randomization.UniformPlacementSampler(bounds=region, batch_size=b)
+            sampler = randomization.UniformPlacementSampler(bounds=self.OBJECT_REGION[:2], batch_size=b)
             radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001
             for shape, descr in zip(self.objects, self.objects_descr):
                 shape_xy = xy + sampler.sample(radius, max_trials=100)

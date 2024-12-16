@@ -1,10 +1,12 @@
 # PaliGemma tokenize vocabulary with 1024 entries that represent coordinates in normalized image-space (<loc0000>...<loc1023>)
 import numpy as np
 import torch
-from utils_trajectory import project_points, clip_and_interpolate
 import re
 from pdb import set_trace
 from scipy.spatial.transform import Rotation as R
+
+from utils_trajectory import project_points, clip_and_interpolate
+from utils_trajectory import unproject_points, unproject_points_cam
 
 def normalize_imgcoord(traj, resolution_wh):
     """
@@ -191,7 +193,7 @@ def encode_trajectory_xyzrotvec(curve_3d, orns_3d, camera):
     poses = Pose.create_from_pq(p=curve_3d.view(-1, 3), q=orns_3d.view(-1, 4))
     extrinsic_orn = R.from_matrix(camera.get_extrinsic_matrix()[:, :3, :3])
     extrinsic_p = Pose.create_from_pq(p=camera.get_extrinsic_matrix()[:, :3, 3],
-                                        q=extrinsic_orn.as_quat(scalar_first=True))
+                                      q=extrinsic_orn.as_quat(scalar_first=True))
     poses_c = extrinsic_p * poses
     orn_c_obj = R.from_quat(poses_c.get_q(), scalar_first=True)
 
@@ -212,11 +214,11 @@ def encode_trajectory_xyzrotvec(curve_3d, orns_3d, camera):
         result += f"<loc{rv[0]:04d}><loc{rv[1]:04d}><loc{rv[2]:04d}>"
     return curve_2d_short, depth, result.strip()  # Remove any trailing newlines
 
-from utils_trajectory import unproject_points
-from scipy.spatial.transform import Rotation as R
-from mani_skill.utils.structs import Pose
 
-def decode_trajectory_xyzrotvec(caption, camera):
+def decode_caption_xyzrotvec(caption, camera):
+    """
+    Takes a trajectory string and converts it into curve_25d, quat_c
+    """
     num_tokens = 6
     DEPTH_SCALE = 100
     ROT_SCALE = 100
@@ -237,6 +239,16 @@ def decode_trajectory_xyzrotvec(caption, camera):
     rotvec_positive = torch.tensor((loc_r0, loc_r1, loc_r2)).T
     rotvec = rotvec_positive * torch.tensor([-1, 1, 1])
     quat_c = torch.tensor(R.from_rotvec(rotvec).as_quat(scalar_first=True)).float()
+    return curve_25d, quat_c
+
+
+def decode_trajectory_xyzrotvec(caption, camera):
+    """
+    Takes a caption string and converts it to world coordinates
+    """
+    from mani_skill.utils.structs import Pose
+
+    curve_25d, quat_c = decode_caption_xyzrotvec(caption, camera)
 
     # from camera to world coordinates
     extrinsic_orn = R.from_matrix(camera.get_extrinsic_matrix()[:, :3, :3])
@@ -248,6 +260,13 @@ def decode_trajectory_xyzrotvec(caption, camera):
     return curve_w, quat_w.get_q().unsqueeze(0)  # shape (P, 3 = u, v, d)
 
 
+def caption_to_traj_cam_xyzrotvec(caption, camera):
+    """
+    Takes a caption string and converts it to camera coordinates
+    """
+    curve_25d, quat_c = decode_caption_xyzrotvec(caption, camera)
+    curve_c = unproject_points_cam(camera, curve_25d)
+    return curve_c, quat_c
 
 
 def check_encode_decode():
@@ -255,7 +274,6 @@ def check_encode_decode():
     Check that encoding a trajectory to tokens and back does not produce large errors.
     """
     from utils_trajectory import DummyCamera
-    from utils_trajectory import unproject_points
     
     camera_extrinsic = [[[-0.759, 0.651, 0.0, 0.0], [0.301, 0.351, -0.887, 0.106], [-0.577, -0.673, -0.462, 0.575]]]
     camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
@@ -278,7 +296,7 @@ def check_encode_decode():
     assert torch.allclose(points_3d, points_3d_est, atol=.005)
     assert torch.allclose(orns_3d, orns_3d_est, atol=.005)
     
-    # check xyzr
+    # check xyz-rotvec
     curve_25d, depth, token_str = encode_trajectory_xyzrotvec(points_3d, orns_3d, camera)
     points_3d_est, orns_3d_est = decode_trajectory_xyzrotvec(token_str, camera)
     assert torch.allclose(points_3d, points_3d_est, atol=.005)

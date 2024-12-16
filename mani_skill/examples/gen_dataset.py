@@ -84,7 +84,7 @@ def reset_random(args, force=True):
 
 
 
-def main(args: Args, plot=True):
+def main(args: Args, vis=True):
     np.set_printoptions(suppress=True, precision=3)
     verbose = not args.quiet
     reset_random(args)
@@ -123,7 +123,6 @@ def main(args: Args, plot=True):
         print("Reward mode", env.unwrapped.reward_mode)
     print("Render mode", args.render_mode)
 
-    vis = True
     for _ in range(10**6):
         obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         if args.seed is not None:
@@ -170,7 +169,7 @@ def main(args: Args, plot=True):
         tcp_pose = env.unwrapped.agent.tcp.pose
         _, _, tcp_str = encode_trajectory_xyzrotvec(tcp_pose.get_p().unsqueeze(0), tcp_pose.get_q().unsqueeze(0), camera)   
         
-        json_dict = dict(prefix=action_text+tcp_str, suffix=token_str,
+        json_dict = dict(prefix=action_text+" "+tcp_str, suffix=token_str,
                          action_text=action_text,
                          camera_extrinsic=camera.get_extrinsic_matrix().detach().numpy().tolist(),
                          camera_intrinsic=camera.get_intrinsic_matrix().detach().numpy().tolist(),
@@ -188,7 +187,7 @@ def main(args: Args, plot=True):
             orns_3d = orns_3d_est
 
         # Evaluate the trajectory
-        eval_trajectory = True
+        eval_trajectory = False
         if eval_trajectory:
             from mani_skill.examples.motionplanning.panda.motionplanner import \
                 PandaArmMotionPlanningSolver
@@ -305,12 +304,9 @@ def test_angles(env, camera):
 
 
 def save_dataset(sample_generator, N: int, dataset_path):
-    
     os.makedirs(dataset_path, exist_ok=True)
-
     # Initialize a ThreadPoolExecutor with one or more workers
     executor = ThreadPoolExecutor(max_workers=3)
-
     def save_image(image, path) -> None:
         Image.fromarray(image).save(path, format='JPEG')
         
@@ -336,7 +332,6 @@ def save_dataset(sample_generator, N: int, dataset_path):
         
     N_cur = get_num_lines()
     N_remaining = N - N_cur
-
     annotations = []
     for i in tqdm(range(N_remaining)):
         image_before, json_dict, rnd_seed = next(sample_generator)
@@ -362,5 +357,5 @@ if __name__ == "__main__":
     # 1. uncomment the yeild line in the main function.
     # 2. set eval_trajectory = False
     # 3. set encode_decode_trajectory = False
-    #N_samples = 100000/0.8
-    #save_dataset(main(parsed_args, plot=False), N=int(N_samples), dataset_path=Path("/tmp/clevr-act-5/dataset"))
+    #N_samples = 200000/0.8
+    #save_dataset(main(parsed_args, vis=False), N=int(N_samples), dataset_path=Path("/tmp/clevr-act-6/dataset"))

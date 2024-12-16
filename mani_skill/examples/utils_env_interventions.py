@@ -82,3 +82,16 @@ def move_object_onto(env, randomize_text=False, pretend=False):
 # move_object_between
 # upside down
 # rotate
+
+
+# AVA - atomic visual actions dataset
+# Carry/hold (100598)
+# Touch (21099)
+# Lift/pick up (634)
+# Put down (653)
+# Open (1547)
+# Close (986)
+# Push (465)
+# Pull (460)
+# Throw (336)
+# Catch (97)

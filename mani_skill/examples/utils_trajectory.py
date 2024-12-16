@@ -44,11 +44,11 @@ def project_point(camera, point_3d):
     return point_image_n
 
 class DummyCamera:
-    def __init__(self, intrinsic_matrix, extrinsic_matrix):
+    def __init__(self, intrinsic_matrix, extrinsic_matrix, width=448, height=448):
         self.intrinsic_matrix = torch.tensor(intrinsic_matrix)
         self.extrinsic_matrix = torch.tensor(extrinsic_matrix)
-        self.width = 448
-        self.height = 448
+        self.width = width
+        self.height = height
     def get_extrinsic_matrix(self):
         return self.extrinsic_matrix
     def get_intrinsic_matrix(self): 
@@ -89,9 +89,9 @@ def project_points(camera, points_3d, return_depth=False):
     points25 = torch.stack((x,y, points_image_h[..., 2]), dim=-1)
     return points25
 
-def unproject_points(camera, points_25d):
+def unproject_points_cam(camera, points_25d):
     """
-    Unprojects 2D image points back into 3D world coordinates.
+    Unprojects 2D image points back into 3D camera coordinates.
 
     Parameters:
     - camera: An instance of the Camera class with necessary methods.
@@ -113,7 +113,21 @@ def unproject_points(camera, points_25d):
 
     # Step 2: Convert from image plane to camera coordinates
     points_camera = batch_multiply(intrinsic_matrix_inv.view(-1, 3, 3), points_25d.view(-1, 3))  # Shape (N * P, 3)
-    points_camera_h = torch.cat((points_camera, torch.ones(len(points_camera),1)),axis=1)
+    return points_camera, points_25d
+
+def unproject_points(camera, points_25d):
+    """
+    Unprojects 2D image points back into 3D world coordinates.
+
+    Parameters:
+    - camera: An instance of the Camera class with necessary methods.
+    - points_2d: A tensor of shape (N, P, 3) representing the 2D image coordinates.
+
+    Returns:
+    - points_3d: A tensor of shape (N, P, 3) representing the 3D points in world coordinates.
+    """
+    points_camera, points_25d = unproject_points_cam(camera, points_25d)
+    points_camera_h = torch.cat((points_camera, torch.ones(len(points_camera), 1)), axis=1)
 
     # Step 3: Get the extrinsic matrix and its inverse
     extrinsic_matrix = camera.get_extrinsic_matrix()  # shape (N, 3, 4)
