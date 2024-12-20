@@ -4,6 +4,11 @@ python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array"
 
 Option 2: record trajectories
 python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array" -c "pd_joint_pos"
+
+Option 3: eval model:
+python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array" -c "pd_joint_pos" -model="/tmp/clevr-act-5/model/paligemma-3b-pt-224-final.f16.npz" -gpu=3
+
+
 """
 import gymnasium as gym
 import numpy as np
@@ -27,11 +32,11 @@ from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.utils.wrappers import RecordEpisode
 from mani_skill.utils.structs import Pose
         
-import clevr_env  # do import to register env, not used otherwise
-from clevr_env_solver import get_grasp_pose_and_obb
-from utils_env_interventions import move_object_onto
-from utils_trajectory import project_points, generate_curve_torch, plot_gradient_curve
-from utils_trajectory import clip_and_interpolate
+import mani_skill.examples.clevr_env  # do import to register env, not used otherwise
+from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb
+from mani_skill.examples.utils_env_interventions import move_object_onto
+from mani_skill.examples.utils_trajectory import project_points, generate_curve_torch, plot_gradient_curve
+from mani_skill.examples.utils_trajectory import clip_and_interpolate
 
 from pdb import set_trace
 
@@ -73,6 +78,13 @@ class Args:
     seed: Annotated[Optional[Union[int, List[int]]], tyro.conf.arg(aliases=["-s"])] = None
     """Seed(s) for random actions and simulator. Can be a single integer or a list of integers. Default is None (no seeds)"""
 
+    model: Annotated[str, tyro.conf.arg(aliases=["-m"])] = "none"
+    """Model to evaluate."""
+
+    gpu: Annotated[Optional[int], tyro.conf.arg(aliases=["-gpu"])] = -1
+    """GPU to run model on."""
+
+
 
 def reset_random(args, force=True):
     if args.seed is None or force:
@@ -84,7 +96,7 @@ def reset_random(args, force=True):
 
 
 
-def main(args: Args, vis=True):
+def main(args: Args, vis=True, model=None):
     np.set_printoptions(suppress=True, precision=3)
     verbose = not args.quiet
     reset_random(args)
@@ -115,7 +127,7 @@ def main(args: Args, vis=True):
         new_traj_name = f"CLEVR_{sample_name}"
         record_dir = record_dir.format(env_id=args.env_id)
         env = RecordEpisode(env, record_dir, trajectory_name=new_traj_name, info_on_video=False, save_trajectory=True, max_steps_per_video=env._max_episode_steps)
-
+    
     if verbose:
         print("Observation space", env.observation_space)
         print("Action space", env.action_space)
@@ -168,8 +180,9 @@ def main(args: Args, vis=True):
         # encode tcp position
         tcp_pose = env.unwrapped.agent.tcp.pose
         _, _, tcp_str = encode_trajectory_xyzrotvec(tcp_pose.get_p().unsqueeze(0), tcp_pose.get_q().unsqueeze(0), camera)   
-        
-        json_dict = dict(prefix=action_text+" "+tcp_str, suffix=token_str,
+        prefix = action_text+" "+tcp_str
+
+        json_dict = dict(prefix=prefix, suffix=token_str,
                          action_text=action_text,
                          camera_extrinsic=camera.get_extrinsic_matrix().detach().numpy().tolist(),
                          camera_intrinsic=camera.get_intrinsic_matrix().detach().numpy().tolist(),
@@ -186,12 +199,20 @@ def main(args: Args, vis=True):
             curve_3d = curve_3d_est  # set the unparsed trajectory one used for policy
             orns_3d = orns_3d_est
 
+
         # Evaluate the trajectory
-        eval_trajectory = False
+        eval_trajectory = True
         if eval_trajectory:
             from mani_skill.examples.motionplanning.panda.motionplanner import \
                 PandaArmMotionPlanningSolver
             
+            if model:
+                from utils_traj_tokens import decode_trajectory_xyzrotvec
+                img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
+                curve_3d_pred, orns_3d_pred = decode_trajectory_xyzrotvec(token_pred, camera)
+                curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
+                orns_3d = orns_3d_pred
+
             assert curve_3d.shape[1] == 2 and orns_3d.shape[1] == 2  # start and stop poses
             _, curve_3d_i = generate_curve_torch(curve_3d[:, 0], curve_3d[:, -1], num_points=3)
             grasp_pose_sapien = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
@@ -213,7 +234,7 @@ def main(args: Args, vis=True):
             planner.move_to_pose_with_screw(lift_pose)
             planner.move_to_pose_with_screw(align_pose)
             res = planner.open_gripper()
-            print("reward", env.unwrapped.eval_reward())
+            print("reward", env.unwrapped.eval_reward()[0])
             planner.close()
 
         #test_angles(env, camera)

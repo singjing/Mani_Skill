@@ -22,23 +22,24 @@ from pdb import set_trace
 
 @register_env("ClevrMove-v1", max_episode_steps=50)
 class StackCubeEnv(BaseEnv):
-
     SUPPORTED_ROBOTS = ["panda_wristcam", "panda", "fetch"]
-    agent: Union[Panda, Fetch]
+    SUPPORTED_OBJECT_DATASETS = ["clevr", "ycb", "objaverse"]
+    SUPPORTED_SCENE_DATASETS = ['Table', 'ProcTHOR']
+    RANDOMIZE_VIEW = False
 
-    # Geometric sahpes, inspired by CLEVR
-    shapes = {"sphere":actors.build_sphere, "cube":actors.build_cube } # "cylinder":actors.build_cylinder}
-    colors = {"gray": [87, 87, 87],  "red": [173, 35, 35], "blue": [42, 75, 215], "green": [29, 105, 20], "brown": [129, 74, 25], "purple": [129, 38, 192], "cyan": [41, 208, 208], "yellow": [255, 238, 51]}
-    sizes = {"large": 0.7/10./2., "small": 0.35/10./2.}
+    agent: Union[Panda, Fetch]
 
     OBJECT_REGION = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
 
 
     def __init__(
-        self, *args, robot_uids="panda_wristcam", robot_init_qpos_noise=0.02, **kwargs
+        self, *args, robot_uids="panda_wristcam",scene_dataset="Table", object_dataset="clevr", robot_init_qpos_noise=0.02, **kwargs
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
+        self.scene_dataset = scene_dataset
+        self.object_dataset = object_dataset
 
+        # cached stuff for loaders
         self.objaverse_model_ids = None
         self.ycb_model_ids = None
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
@@ -72,14 +73,23 @@ class StackCubeEnv(BaseEnv):
 
     @property
     def _default_human_render_camera_configs(self):
-        return self._default_human_render_camera_configs_random
+        if self.RANDOMIZE_VIEW:
+            return self._default_human_render_camera_configs_random
+        else:
+            return self._default_human_render_camera_configs_fixed
 
     def _load_scene_clevr(self, num_objects, min_unique=2, max_attempts=100):
+        # Geometric sahpes, inspired by CLEVR
+        shapes = {"sphere":actors.build_sphere, "cube":actors.build_cube } # "cylinder":actors.build_cylinder}
+        colors = {"gray": [87, 87, 87],  "red": [173, 35, 35], "blue": [42, 75, 215], "green": [29, 105, 20],
+                  "brown": [129, 74, 25], "purple": [129, 38, 192], "cyan": [41, 208, 208], "yellow": [255, 238, 51]}
+        sizes = {"large": 0.7/10./2., "small": 0.35/10./2.}
+
         # Make sure that there are at least min_unique unique (non-duplicate) objects
         for _ in range(max_attempts):
-            shapes_choice = randomization.uniform(0.0, float(len(self.shapes)),size=(num_objects,)).cpu().numpy().astype(int)
-            colors_choice = randomization.uniform(0.0, float(len(self.colors)),size=(num_objects,)).cpu().numpy().astype(int)
-            sizes_choice = randomization.uniform(0.0, float(len(self.sizes)),size=(num_objects,)).cpu().numpy().astype(int)
+            shapes_choice = randomization.uniform(0.0, float(len(shapes)),size=(num_objects,)).cpu().numpy().astype(int)
+            colors_choice = randomization.uniform(0.0, float(len(colors)),size=(num_objects,)).cpu().numpy().astype(int)
+            sizes_choice = randomization.uniform(0.0, float(len(sizes)),size=(num_objects,)).cpu().numpy().astype(int)
             shape_array = np.array((shapes_choice, colors_choice, sizes_choice)).T
             unique, counts = np.unique(shape_array, axis=0, return_counts=True)
             if np.sum(counts==1) >= min_unique:
@@ -94,9 +104,9 @@ class StackCubeEnv(BaseEnv):
         self.objects = []
         self.objects_descr = []
         for i in range(num_objects):
-            shape_name, build_function = list(self.shapes.items())[shapes_choice[i]]
-            color_name, color = list(self.colors.items())[colors_choice[i]]
-            size_name, size = list(self.sizes.items())[sizes_choice[i]]
+            shape_name, build_function = list(shapes.items())[shapes_choice[i]]
+            color_name, color = list(colors.items())[colors_choice[i]]
+            size_name, size = list(sizes.items())[sizes_choice[i]]
             color = list(np.array(color + [255.,])/255.)
             tmp = build_function(self.scene, size, color=color, name=f"{shape_name}_{i}")
             self.objects.append(tmp)
@@ -135,18 +145,25 @@ class StackCubeEnv(BaseEnv):
         self.objects_unique = [count_dict[num] == 1 for num in model_ids]
 
     def _load_scene_objaverse(self, num_objects):
+        from pathlib import Path
         num_objects = 2
-        objaverse_folder = (ASSET_DIR / "../../.objaverse/hf-objaverse-v1/").resolve()
+        #objaverse_folder = (ASSET_DIR / "../../.objaverse/hf-objaverse-v1/").resolve()
+        objaverse_folder = Path("/ihome/argusm/.objaverse/hf-objaverse-v1/")
+
         if not objaverse_folder.exists():
-            print("Warning: objaverse folder not found, download files using objaverse_download.ipynb")
+            print("Error: No objaverse files in {objaverse_folder}, try downloading files using objaverse_download.ipynb")
             raise ValueError
         
+        import transforms3d
+        import sapien
+        import sapien.core as sapien
         from mani_skill.envs.scene import ManiSkillScene
-        def get_objaverse_builder(scene: ManiSkillScene, file: str, add_collision=True, add_visual=True):
+        bg_q = transforms3d.quaternions.axangle2quat(np.array([1, 0, 0]), theta=np.deg2rad(90))
+        bg_pose = sapien.Pose(q=bg_q)
+        def get_objaverse_builder(scene: ManiSkillScene, file: str, add_collision=True, add_visual=True, scale=.01):
             builder = scene.create_actor_builder()
+
             density =  1000
-            model_scales = [1.0]
-            scale = model_scales[0]
             physical_material = None
             if add_collision:
                 collision_file = str(file)
@@ -155,42 +172,37 @@ class StackCubeEnv(BaseEnv):
                     scale=[scale] * 3,
                     material=physical_material,
                     #density=density,
+                    pose=bg_pose
                 )
             if add_visual:
                 visual_file = str(file)
-                builder.add_visual_from_file(filename=visual_file, scale=[scale] * 3)
+                builder.add_visual_from_file(filename=visual_file, scale=[scale] * 3, pose=bg_pose)
             return builder
 
         if self.objaverse_model_ids is None:
             glb_files = list((objaverse_folder / "glbs").rglob("*.glb"))
-            print(f"Objaverse models found {len(glb_files)}")
-            glb_downloaded = [x.stem for x in glb_files]
-            glb_downloaded_set = set(glb_downloaded)
+            print(f"Objaverse models found {len(glb_files)}, {objaverse_folder}")
             self.objaverse_model_ids = glb_files
-            anno_path = objaverse_folder / "lvis-annotations.json.gz"
-
-            import gzip, json
-            with gzip.open(anno_path, "rt", encoding="utf-8") as f:
-                lvis_annotations = json.load(f)
-            mapping = {}
-            for category, items in lvis_annotations.items():
-                for index, item in enumerate(items, start=1):  # Use 1-based indexing
-                    if item not in glb_downloaded_set:
-                        continue
-                    mapping[f"{category}-{index}"] = glb_files[glb_downloaded.index(item)]
-            self.objaverse_model_ids = list(mapping.keys())
-            self.objaverse_files = mapping
-
-        model_ids = randomization.uniform(0.0, float(len(self.objaverse_model_ids)), size=(num_objects,)).cpu().numpy().astype(int)
-        for i, model_idx in enumerate(model_ids):
-            model_id = self.objaverse_model_ids[model_idx]
-            filename = self.objaverse_files[model_id]
-            builder = get_objaverse_builder(self.scene, filename)
-            self.objects.append(builder.build(name=f"{model_id}-{i}"))
-            self.objects_descr.append(dict(size="", color="", shape=model_id))
+            self.objaverse_files = dict([(x.stem, x) for x in glb_files])
+        
+        uids_list = sorted(list(self.objaverse_files.keys()))
+        model_ids = randomization.uniform(0.0, float(len(self.objaverse_files)), size=(num_objects,)).cpu().numpy().astype(int)
+        model_uids = [uids_list[x] for x in model_ids]
+        model_uids = ['b5c9d06f19be4c92a1708515f6655573','412ed49af0644f30bae822d29afbb066']
+        OBJAVERSE_SCALES = {
+            'b5c9d06f19be4c92a1708515f6655573':.02,
+            '412ed49af0644f30bae822d29afbb066':.002
+        }
+        for i, uid in enumerate(model_uids):
+            #model_id = self.objaverse_model_ids[model_idx]
+            model_name = "xxx"
+            filename = self.objaverse_files[uid]
+            builder = get_objaverse_builder(self.scene, filename, scale=OBJAVERSE_SCALES[uid])
+            self.objects.append(builder.build(name=f"{model_name}-{i}"))
+            self.objects_descr.append(dict(size="", color="", shape=model_name))
 
             from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
-            print(model_id, get_actor_obb(self.objects[-1]).primitive.extents)
+            print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
         
         unique_vals, counts = np.unique(model_ids, return_counts=True)
         count_dict = dict(zip(unique_vals, counts))
@@ -198,11 +210,18 @@ class StackCubeEnv(BaseEnv):
 
 
     def _load_scene(self, options: dict):
+        from mani_skill.utils.scene_builder.ai2thor import ProcTHORSceneBuilder
         self.cube_half_size = common.to_tensor([0.02] * 3)
-        self.table_scene = TableSceneBuilder(
-            env=self, robot_init_qpos_noise=self.robot_init_qpos_noise
-        )
-        self.table_scene.build()
+
+        if self.scene_dataset == "Table":
+            self.table_scene = TableSceneBuilder(env=self, robot_init_qpos_noise=self.robot_init_qpos_noise)
+            self.table_scene.build()
+        elif self.scene_dataset == "ProcTHOR":
+            self.table_scene = ProcTHORSceneBuilder(env=self, robot_init_qpos_noise=self.robot_init_qpos_noise)
+            self.table_scene.build(build_config_idxs=0)
+        else:
+            raise ValueError
+
         min_objects = 2
         max_objects = 5
 
@@ -210,9 +229,15 @@ class StackCubeEnv(BaseEnv):
         
         self.objects = []
         self.objects_descr = []
-        #self._load_scene_ycb(num_objects)
-        self._load_scene_clevr(num_objects)
-        #self._load_scene_objaverse(num_objects)
+        if self.object_dataset == "clevr":
+            self._load_scene_clevr(num_objects)
+        elif self.object_dataset == "ycb":
+            self._load_scene_ycb(num_objects)
+        elif self.object_dataset == "objaverse":
+            self._load_scene_objaverse(num_objects)
+        else:
+            raise ValueError
+        
 
         self.cubeA = self.objects[0]  
         self.cubeB = self.objects[1]
