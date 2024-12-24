@@ -83,7 +83,7 @@ def encode_actions(label, stats=None, encoding = "xyzrotvec"):
         raise ValueError(f"Unknown encoding: {encoding}")
 
 
-LIMIT_LINES = 1000
+LIMIT_LINES = 250
 #LIMIT_LINES = None
 def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
     """
@@ -138,7 +138,7 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
         # rots.append(to_rot(label["traj_q"][0]))
 
     plot_stats = True
-    set_trace()
+    #set_trace()
     if plot_stats:
         rots = np.array(stats["rots_r"])
         print("r_0", np.percentile(rots[:, 0, 0], [.01, .99]).round(1))
@@ -194,5 +194,5 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
     print("done.")
 
 if __name__ == "__main__":
-    dataset_path = Path("/tmp/clevr-act-6/dataset")
+    dataset_path = Path("/tmp/clevr-act-7/dataset")
     split_dataset(dataset_path)

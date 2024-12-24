@@ -44,9 +44,18 @@ class StackCubeEnv(BaseEnv):
         self.ycb_model_ids = None
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
+    def base_camera_pose(self):
+        #pose = sapien_utils.look_at(eye=[0.3, 0, 0.6], target=[-0.1, 0, 0.1])
+        start_p = [0.6, 0.7, 0.6]
+        end_p = [0.0, 0.0, 0.12]
+        t = 0.5
+        new_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
+        pose = sapien_utils.look_at(new_p, end_p)
+        return pose
+        
     @property
     def _default_sensor_configs(self):
-        pose = sapien_utils.look_at(eye=[0.3, 0, 0.6], target=[-0.1, 0, 0.1])
+        pose = self.base_camera_pose()
         return [CameraConfig("base_camera", pose, 128, 128, np.pi / 2, 0.01, 100)]
 
     @property
@@ -158,11 +167,10 @@ class StackCubeEnv(BaseEnv):
         import sapien
         import sapien.core as sapien
         from mani_skill.envs.scene import ManiSkillScene
-        bg_q = transforms3d.quaternions.axangle2quat(np.array([1, 0, 0]), theta=np.deg2rad(90))
-        bg_pose = sapien.Pose(q=bg_q)
+        obj_q = transforms3d.quaternions.axangle2quat(np.array([1, 0, 0]), theta=np.deg2rad(90))
+        obj_pose = sapien.Pose(q=obj_q)
         def get_objaverse_builder(scene: ManiSkillScene, file: str, add_collision=True, add_visual=True, scale=.01):
             builder = scene.create_actor_builder()
-
             density =  1000
             physical_material = None
             if add_collision:
@@ -172,11 +180,11 @@ class StackCubeEnv(BaseEnv):
                     scale=[scale] * 3,
                     material=physical_material,
                     #density=density,
-                    pose=bg_pose
+                    pose=obj_pose
                 )
             if add_visual:
                 visual_file = str(file)
-                builder.add_visual_from_file(filename=visual_file, scale=[scale] * 3, pose=bg_pose)
+                builder.add_visual_from_file(filename=visual_file, scale=[scale] * 3, pose=obj_pose)
             return builder
 
         if self.objaverse_model_ids is None:

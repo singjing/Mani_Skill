@@ -4,11 +4,6 @@ python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array"
 
 Option 2: record trajectories
 python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array" -c "pd_joint_pos"
-
-Option 3: eval model:
-python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array" -c "pd_joint_pos" -model="/tmp/clevr-act-5/model/paligemma-3b-pt-224-final.f16.npz" -gpu=3
-
-
 """
 import gymnasium as gym
 import numpy as np
@@ -78,12 +73,8 @@ class Args:
     seed: Annotated[Optional[Union[int, List[int]]], tyro.conf.arg(aliases=["-s"])] = None
     """Seed(s) for random actions and simulator. Can be a single integer or a list of integers. Default is None (no seeds)"""
 
-    model: Annotated[str, tyro.conf.arg(aliases=["-m"])] = "none"
-    """Model to evaluate."""
-
-    gpu: Annotated[Optional[int], tyro.conf.arg(aliases=["-gpu"])] = -1
-    """GPU to run model on."""
-
+    # gpu: Annotated[Optional[int], tyro.conf.arg(aliases=["-gpu"])] = -1
+    # """GPU to run model on."""
 
 
 def reset_random(args, force=True):
@@ -119,8 +110,10 @@ def main(args: Args, vis=True, model=None):
         num_envs=args.num_envs,
         sim_backend=args.sim_backend,
         parallel_in_single_scene=parallel_in_single_scene,
+        robot_uids="panda_wristcam",  #fetch, panda_wristcam
         # **args.env_kwargs
     )
+    
     record_dir = args.record_dir
     if record_dir:
         sample_name = str(args.seed[0]).zfill(10)
@@ -203,9 +196,15 @@ def main(args: Args, vis=True, model=None):
         # Evaluate the trajectory
         eval_trajectory = True
         if eval_trajectory:
-            from mani_skill.examples.motionplanning.panda.motionplanner import \
-                PandaArmMotionPlanningSolver
-            
+            if env.unwrapped.robot_uids in ("panda", "panda_wristcam"):
+                from mani_skill.examples.motionplanning.panda.motionplanner import \
+                    PandaArmMotionPlanningSolver as RobotArmMotionPlanningSolver
+            elif env.unwrapped.robot_uids == "fetch":
+                from mani_skill.examples.motionplanning.fetch.motionplanner import \
+                    FetchArmMotionPlanningSolver as RobotArmMotionPlanningSolver
+            else:
+                raise ValueError(f"no motion planner for {env.unwrapped.robot_uids}")
+
             if model:
                 from utils_traj_tokens import decode_trajectory_xyzrotvec
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
@@ -220,7 +219,7 @@ def main(args: Args, vis=True, model=None):
             lift_pose = Pose.create_from_pq(p=curve_3d_i[:, 1], q=orns_3d[:, 1])
             align_pose = Pose.create_from_pq(p=curve_3d_i[:, 2], q=orns_3d[:, 1])
 
-            planner = PandaArmMotionPlanningSolver(
+            planner = RobotArmMotionPlanningSolver(
                 env,
                 debug=False,
                 vis=vis,
@@ -371,12 +370,12 @@ def save_dataset(sample_generator, N: int, dataset_path):
 if __name__ == "__main__":
     parsed_args = tyro.cli(Args)
     #Important: in order to save dataset comment the yeild line in the main function.
-    main(parsed_args)
+    main(parsed_args, vis=False)
 
     # python gen_dataset.py -e "ClevrMove-v1" --render-mode="rgb_array"
     #Important: in order to save dataset do the following:
     # 1. uncomment the yeild line in the main function.
     # 2. set eval_trajectory = False
     # 3. set encode_decode_trajectory = False
-    #N_samples = 200000/0.8
-    #save_dataset(main(parsed_args, vis=False), N=int(N_samples), dataset_path=Path("/tmp/clevr-act-6/dataset"))
+    #N_samples = 1000/0.8
+    #save_dataset(main(parsed_args, vis=False), N=int(N_samples), dataset_path=Path("/tmp/clevr-act-7/dataset"))
