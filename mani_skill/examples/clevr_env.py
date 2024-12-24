@@ -5,6 +5,7 @@ from typing import Any, Dict, Union
 
 import numpy as np
 import torch
+import sapien
 
 from mani_skill import ASSET_DIR
 from mani_skill.agents.robots import Fetch, Panda
@@ -15,6 +16,7 @@ from mani_skill.utils import common, sapien_utils
 from mani_skill.utils.building import actors
 from mani_skill.utils.registration import register_env
 from mani_skill.utils.scene_builder.table import TableSceneBuilder
+from mani_skill.utils.scene_builder.ai2thor import ProcTHORSceneBuilder
 from mani_skill.utils.structs.pose import Pose
 from mani_skill.utils.io_utils import load_json
 
@@ -33,7 +35,7 @@ class StackCubeEnv(BaseEnv):
 
 
     def __init__(
-        self, *args, robot_uids="panda_wristcam",scene_dataset="Table", object_dataset="clevr", robot_init_qpos_noise=0.02, **kwargs
+        self, *args, robot_uids="panda_wristcam", scene_dataset="Table", object_dataset="clevr", robot_init_qpos_noise=0.02, **kwargs
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.scene_dataset = scene_dataset
@@ -87,6 +89,9 @@ class StackCubeEnv(BaseEnv):
         else:
             return self._default_human_render_camera_configs_fixed
 
+    def _load_agent(self, options: dict):
+        super()._load_agent(options, sapien.Pose(p=[-0.0, 0, 0]))
+
     def _load_scene_clevr(self, num_objects, min_unique=2, max_attempts=100):
         # Geometric sahpes, inspired by CLEVR
         shapes = {"sphere":actors.build_sphere, "cube":actors.build_cube } # "cylinder":actors.build_cylinder}
@@ -117,7 +122,8 @@ class StackCubeEnv(BaseEnv):
             color_name, color = list(colors.items())[colors_choice[i]]
             size_name, size = list(sizes.items())[sizes_choice[i]]
             color = list(np.array(color + [255.,])/255.)
-            tmp = build_function(self.scene, size, color=color, name=f"{shape_name}_{i}")
+            initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
+            tmp = build_function(self.scene, size, color=color, name=f"{shape_name}_{i}", initial_pose=initial_pose)
             self.objects.append(tmp)
             # now do text description
             descr = dict(shape=shape_name,
@@ -143,6 +149,7 @@ class StackCubeEnv(BaseEnv):
                 self.scene,
                 id=f"ycb:{model_id}",
             )
+            builder.initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
             #builder.set_scene_idxs([i])
             model_name = " ".join(model_id.split("_")[1:])
             self.objects.append(builder.build(name=f"{model_id}-{i}"))
@@ -206,6 +213,7 @@ class StackCubeEnv(BaseEnv):
             model_name = "xxx"
             filename = self.objaverse_files[uid]
             builder = get_objaverse_builder(self.scene, filename, scale=OBJAVERSE_SCALES[uid])
+            builder.initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
             self.objects.append(builder.build(name=f"{model_name}-{i}"))
             self.objects_descr.append(dict(size="", color="", shape=model_name))
 
@@ -218,7 +226,6 @@ class StackCubeEnv(BaseEnv):
 
 
     def _load_scene(self, options: dict):
-        from mani_skill.utils.scene_builder.ai2thor import ProcTHORSceneBuilder
         self.cube_half_size = common.to_tensor([0.02] * 3)
 
         if self.scene_dataset == "Table":
