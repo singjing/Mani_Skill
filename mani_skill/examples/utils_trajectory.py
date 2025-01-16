@@ -203,13 +203,24 @@ def plot_gradient_curve(axs, x, y, colormap='viridis'):
     axs.add_collection(lc)
 
 
-def clip_and_interpolate(curve_2d, camera, num_points=None):
+def clip_and_interpolate(curve_2d, camera, num_points=None, return_didclip=False):
+    """
+    Arguments:
+        num_points: interpolate to num_points
+        return_didclip: returns True if we did a clip operation
+    """
     curve_2d_clip = curve_2d.clone()
     curve_2d_clip[:, :, 0] = torch.clip(curve_2d_clip[:, :, 0], 0+1, camera.width)
     curve_2d_clip[:, :, 1] = torch.clip(curve_2d_clip[:, :, 1], 0+1, camera.height)
+    didclip = not torch.allclose(curve_2d_clip, curve_2d)
+
     if num_points:
         curve2d_short = subsample_trajectory(curve_2d_clip, points_new=num_points)
-        return torch.tensor(curve2d_short)
+        curve_2d_clip = torch.tensor(curve2d_short)
+
+    if return_didclip:
+        return curve_2d_clip, didclip
+    
     return curve_2d_clip
 
 from scipy.spatial.transform import Rotation as R

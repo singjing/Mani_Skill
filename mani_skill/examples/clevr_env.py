@@ -27,7 +27,7 @@ class StackCubeEnv(BaseEnv):
     SUPPORTED_ROBOTS = ["panda_wristcam", "panda", "fetch"]
     SUPPORTED_OBJECT_DATASETS = ["clevr", "ycb", "objaverse"]
     SUPPORTED_SCENE_DATASETS = ['Table', 'ProcTHOR']
-    RANDOMIZE_VIEW = False
+    RANDOMIZE_VIEW = True
 
     agent: Union[Panda, Fetch]
 
@@ -164,7 +164,7 @@ class StackCubeEnv(BaseEnv):
         from pathlib import Path
         num_objects = 2
         #objaverse_folder = (ASSET_DIR / "../../.objaverse/hf-objaverse-v1/").resolve()
-        objaverse_folder = Path("/ihome/argusm/.objaverse/hf-objaverse-v1/")
+        objaverse_folder = Path("/home/argusm/.objaverse/hf-objaverse-v1/")
 
         if not objaverse_folder.exists():
             print("Error: No objaverse files in {objaverse_folder}, try downloading files using objaverse_download.ipynb")
@@ -293,27 +293,6 @@ class StackCubeEnv(BaseEnv):
         reward = torch.clamp(1 - objA_to_goal_dist / self.objA_to_goal_dist_inital, 0, 1)
         return reward
         
-    # This is the old code below. It is not used in the current implementation.
-    def evaluate(self):
-        pos_A = self.cubeA.pose.p
-        pos_B = self.cubeB.pose.p
-        offset = pos_A - pos_B
-        xy_flag = (
-            torch.linalg.norm(offset[..., :2], axis=1)
-            <= torch.linalg.norm(self.cube_half_size[:2]) + 0.005
-        )
-        z_flag = torch.abs(offset[..., 2] - self.cube_half_size[..., 2] * 2) <= 0.005
-        is_cubeA_on_cubeB = torch.logical_and(xy_flag, z_flag)
-        # NOTE (stao): GPU sim can be fast but unstable. Angular velocity is rather high despite it not really rotating
-        is_cubeA_static = self.cubeA.is_static(lin_thresh=1e-2, ang_thresh=0.5)
-        is_cubeA_grasped = self.agent.is_grasping(self.cubeA)
-        success = is_cubeA_on_cubeB * is_cubeA_static * (~is_cubeA_grasped)
-        return {
-            "is_cubeA_grasped": is_cubeA_grasped,
-            "is_cubeA_on_cubeB": is_cubeA_on_cubeB,
-            "is_cubeA_static": is_cubeA_static,
-            "success": success.bool(),
-        }
 
     def _get_obs_extra(self, info: Dict):
         obs = dict(tcp_pose=self.agent.tcp.pose.raw_pose)
@@ -327,45 +306,69 @@ class StackCubeEnv(BaseEnv):
             )
         return obs
 
-    def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
-        # reaching reward
-        tcp_pose = self.agent.tcp.pose.p
-        cubeA_pos = self.cubeA.pose.p
-        cubeA_to_tcp_dist = torch.linalg.norm(tcp_pose - cubeA_pos, axis=1)
-        reward = 2 * (1 - torch.tanh(5 * cubeA_to_tcp_dist))
-
-        # grasp and place reward
-        cubeA_pos = self.cubeA.pose.p
-        cubeB_pos = self.cubeB.pose.p
-        goal_xyz = torch.hstack(
-            [cubeB_pos[:, 0:2], (cubeB_pos[:, 2] + self.cube_half_size[2] * 2)[:, None]]
-        )
-        cubeA_to_goal_dist = torch.linalg.norm(goal_xyz - cubeA_pos, axis=1)
-        place_reward = 1 - torch.tanh(5.0 * cubeA_to_goal_dist)
-
-        reward[info["is_cubeA_grasped"]] = (4 + place_reward)[info["is_cubeA_grasped"]]
-
-        # ungrasp and static reward
-        gripper_width = (self.agent.robot.get_qlimits()[0, -1, 1] * 2).to(
-            self.device
-        )  # NOTE: hard-coded with panda
-        is_cubeA_grasped = info["is_cubeA_grasped"]
-        ungrasp_reward = (
-            torch.sum(self.agent.robot.get_qpos()[:, -2:], axis=1) / gripper_width
-        )
-        ungrasp_reward[~is_cubeA_grasped] = 1.0
-        v = torch.linalg.norm(self.cubeA.linear_velocity, axis=1)
-        av = torch.linalg.norm(self.cubeA.angular_velocity, axis=1)
-        static_reward = 1 - torch.tanh(v * 10 + av)
-        reward[info["is_cubeA_on_cubeB"]] = (
-            6 + (ungrasp_reward + static_reward) / 2.0
-        )[info["is_cubeA_on_cubeB"]]
-
-        reward[info["success"]] = 8
-
-        return reward
-
     def compute_normalized_dense_reward(
         self, obs: Any, action: torch.Tensor, info: Dict
     ):
-        return self.compute_dense_reward(obs=obs, action=action, info=info) / 8
+        return self.eval_reward()
+    
+    # # This is the old code below. It is not used in the current implementation.
+    # def evaluate(self):
+    #     pos_A = self.cubeA.pose.p
+    #     pos_B = self.cubeB.pose.p
+    #     offset = pos_A - pos_B
+    #     xy_flag = (
+    #         torch.linalg.norm(offset[..., :2], axis=1)
+    #         <= torch.linalg.norm(self.cube_half_size[:2]) + 0.005
+    #     )
+    #     z_flag = torch.abs(offset[..., 2] - self.cube_half_size[..., 2] * 2) <= 0.005
+    #     is_cubeA_on_cubeB = torch.logical_and(xy_flag, z_flag)
+    #     # NOTE (stao): GPU sim can be fast but unstable. Angular velocity is rather high despite it not really rotating
+    #     is_cubeA_static = self.cubeA.is_static(lin_thresh=1e-2, ang_thresh=0.5)
+    #     is_cubeA_grasped = self.agent.is_grasping(self.cubeA)
+    #     success = is_cubeA_on_cubeB * is_cubeA_static * (~is_cubeA_grasped)
+    #     return {
+    #         "is_cubeA_grasped": is_cubeA_grasped,
+    #         "is_cubeA_on_cubeB": is_cubeA_on_cubeB,
+    #         "is_cubeA_static": is_cubeA_static,
+    #         "success": success.bool(),
+    #     }
+
+    # def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
+    #     # reaching reward
+    #     tcp_pose = self.agent.tcp.pose.p
+    #     cubeA_pos = self.cubeA.pose.p
+    #     cubeA_to_tcp_dist = torch.linalg.norm(tcp_pose - cubeA_pos, axis=1)
+    #     reward = 2 * (1 - torch.tanh(5 * cubeA_to_tcp_dist))
+
+    #     # grasp and place reward
+    #     cubeA_pos = self.cubeA.pose.p
+    #     cubeB_pos = self.cubeB.pose.p
+    #     goal_xyz = torch.hstack(
+    #         [cubeB_pos[:, 0:2], (cubeB_pos[:, 2] + self.cube_half_size[2] * 2)[:, None]]
+    #     )
+    #     cubeA_to_goal_dist = torch.linalg.norm(goal_xyz - cubeA_pos, axis=1)
+    #     place_reward = 1 - torch.tanh(5.0 * cubeA_to_goal_dist)
+
+    #     reward[info["is_cubeA_grasped"]] = (4 + place_reward)[info["is_cubeA_grasped"]]
+
+    #     # ungrasp and static reward
+    #     gripper_width = (self.agent.robot.get_qlimits()[0, -1, 1] * 2).to(
+    #         self.device
+    #     )  # NOTE: hard-coded with panda
+    #     is_cubeA_grasped = info["is_cubeA_grasped"]
+    #     ungrasp_reward = (
+    #         torch.sum(self.agent.robot.get_qpos()[:, -2:], axis=1) / gripper_width
+    #     )
+    #     ungrasp_reward[~is_cubeA_grasped] = 1.0
+    #     v = torch.linalg.norm(self.cubeA.linear_velocity, axis=1)
+    #     av = torch.linalg.norm(self.cubeA.angular_velocity, axis=1)
+    #     static_reward = 1 - torch.tanh(v * 10 + av)
+    #     reward[info["is_cubeA_on_cubeB"]] = (
+    #         6 + (ungrasp_reward + static_reward) / 2.0
+    #     )[info["is_cubeA_on_cubeB"]]
+    #     reward[info["success"]] = 8
+    #     return reward
+
+    # def compute_normalized_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
+    #     return self.compute_dense_reward(obs=obs, action=action, info=info) / 8
+
