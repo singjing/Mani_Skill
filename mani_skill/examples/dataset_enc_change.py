@@ -7,7 +7,16 @@ import numpy as np
 import torch
 from mani_skill.utils.structs.pose import Pose
 from utils_trajectory import DummyCamera, generate_curve_torch
+import os
+
+
+from utils_trajectory import are_orns_close
+from utils_traj_tokens import to_prefix_suffix
 from utils_traj_tokens import encode_trajectory_xyz
+from utils_traj_tokens import encode_trajectory_xyzrotvec 
+from utils_traj_tokens import decode_trajectory_xyzrotvec 
+from utils_traj_tokens import encode_trajectory_xyzrotvec_rbt
+
 
 from pdb import set_trace
 
@@ -29,14 +38,23 @@ def check_and_fix_format(label):
     if '<loc-' in label["prefix"]:
         print("found <loc- in", label["suffix"])
 
-def encode_actions(label, stats=None, encoding="xyzrotvec", i=None):
+def encode_actions(label, stats=None, encoding="xyzrotvec-cam", i=None):
     """
     This code should be similar to that in gen_dataset.py
     """
     camera = DummyCamera(label["camera_intrinsic"], label["camera_extrinsic"])
     obj_start_pose = Pose(raw_pose=torch.tensor(label["obj_start_pose"]))
     obj_end_pose = Pose(raw_pose=torch.tensor(label["obj_end_pose"]))
+    grasp_pose = Pose(raw_pose=torch.tensor(label["grasp_pose"]))
+    tcp_pose = Pose(raw_pose=torch.tensor(label["tcp_start_pose"]))
+    robot_pose = Pose(raw_pose=torch.tensor(label["robot_pose"]))
+    action_text = label["action_text"]
 
+    
+    label["enc-info"] = {}
+    if i == 0:
+        label["enc-info"] = dict(mode=encoding)
+        
     if encoding == "xyz":
         _, curve_3d = generate_curve_torch(obj_start_pose.get_p(), obj_end_pose.get_p(), num_points=2)
         curve_2d, depth, curve_tokens = encode_trajectory_xyz(curve_3d, camera)
@@ -44,21 +62,19 @@ def encode_actions(label, stats=None, encoding="xyzrotvec", i=None):
         _, curve_3d = generate_curve_torch(obj_start_pose.get_p(), obj_end_pose.get_p(), num_points=2)
         curve_2d, depth, curve_tokens = encode_trajectory_xyz(curve_3d, camera)
 
-    elif encoding == "xyzrotvec":
-        from utils_traj_tokens import encode_trajectory_xyzrotvec as enc_func
-        from utils_traj_tokens import decode_trajectory_xyzrotvec as dec_func
-        from utils_trajectory import are_orns_close
-        from gen_dataset import to_prefix_suffix
-        grasp_pose = Pose(raw_pose=torch.tensor(label["grasp_pose"]))
-        tcp_pose = Pose(raw_pose=torch.tensor(label["tcp_start_pose"]))
-        action_text = label["action_text"]
-
-        prefix, suffix, _, _, info = to_prefix_suffix(obj_start_pose, obj_end_pose, camera, grasp_pose, tcp_pose, action_text, enc_func)
+    elif encoding == "xyzrotvec-rbt":  # xyz-rotation vector in robot coordinates
+        prefix, suffix, _, _, info = to_prefix_suffix(obj_start_pose, obj_end_pose, camera, grasp_pose, tcp_pose, action_text, encode_trajectory_xyzrotvec_rbt,
+                                                      robot_pose=robot_pose)
         label["prefix"] = prefix
         label["suffix"] = suffix
-        label["enc-info"] = info
-        if i == 0:
-            label["enc-info"]["mode"] = "xyzrotvec-cam-proj-abs"
+        label["enc-info"].update(info)
+
+    elif encoding == "xyzrotvec-cam":  # xyz-rotation vector in camera coorinates, should be called uvd-rotvec
+        prefix, suffix, _, _, info = to_prefix_suffix(obj_start_pose, obj_end_pose, camera, grasp_pose, tcp_pose, action_text, encode_trajectory_xyzrotvec,
+                                                      robot_pose=None)
+        label["prefix"] = prefix
+        label["suffix"] = suffix
+        label["enc-info"].update(info)
         
         # check that the way we encoded is the same as what was done for the dataset creation
         check_encodings = False
@@ -76,7 +92,7 @@ def encode_actions(label, stats=None, encoding="xyzrotvec", i=None):
                 print("angle diff[deg]", max_angle)
             
         # collect rotvec stats
-        collect_rotvec_stats = True
+        collect_rotvec_stats = False
         if collect_rotvec_stats:
             extrinsic_orn = R.from_matrix(camera.get_extrinsic_matrix()[:, :3, :3])
             extrinsic = Pose.create_from_pq(p=camera.get_extrinsic_matrix()[:, :3, 3],
@@ -94,9 +110,10 @@ def encode_actions(label, stats=None, encoding="xyzrotvec", i=None):
         raise ValueError(f"Unknown encoding: {encoding}")
 
 filter_visible = True
-LIMIT_LINES = 1250
-#LIMIT_LINES = None
-def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
+#LIMIT_LINES = 2
+LIMIT_LINES = None
+def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42,
+                  action_encoding = "xyzrotvec-cam"):
     """
     Randomly split a JSONL dataset into train and test sets.
 
@@ -105,7 +122,10 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
         train_ratio (float): The ratio of the data to use for training.
         seed (int): Random seed for reproducibility.
     """
+    print("Loading", dataset_path)
+    print("creating encoding", action_encoding)
 
+    dataset_path = dataset_path / "dataset"
     # Define paths for train and test files
     json_file = dataset_path / "_annotations.all.jsonl"
     train_path = dataset_path / "_annotations.train.jsonl"
@@ -122,8 +142,8 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
     indexes_all = np.arange(len(lines_text))
     random.shuffle(indexes_all)
     split_index = int(len(lines_text) * train_ratio)
-    indices_train = indexes_all[:split_index]
-    indices_valid = indexes_all[split_index:]
+    indices_train = sorted(indexes_all[:split_index])
+    indices_valid = sorted(indexes_all[split_index:])
 
     stats = {"rots_r":[], "rots_e":[], "pos_s":[], "pos_e":[]}
     refered_files = []
@@ -135,15 +155,19 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
         except json.decoder.JSONDecodeError:
             print(f"Error decoding line {i}: {line[:50]}")
             continue
-
-        #check_and_fix_format(label)
-        encode_actions(label, stats, i=i)
-        check_and_fix_format(label)
-
+        
+        # check visibility, bit of a hack as it's done via camera encoding
+        encode_actions(label, stats, i=i, encoding="xyzrotvec-cam")
         if filter_visible:
             if label['enc-info']['didclip_traj']:# or label['enc-info']['didclip_tcp']:
                 continue
-            
+
+        if action_encoding != "xyzrotvec-cam":
+            encode_actions(label, stats, i=i, encoding=action_encoding)
+
+        check_and_fix_format(label)
+
+
         refered_files.append(label["image"])
         image2line[label["image"]] = i
         new_label = dict(image=label["image"], prefix=label["prefix"], suffix=label["suffix"])
@@ -209,6 +233,11 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
     filter_save_subset(lines_text, indices_train, train_path, "train")
     filter_save_subset(lines_text, indices_valid, valid_path, "valid")
 
+    info_dict = dict(action_encoding=action_encoding,
+                     filter_visible=filter_visible)
+    with open(dataset_path.parent / "info.json", "w") as subset_file:    
+        json.dump(info_dict, subset_file)
+
     create_zip = False
     if create_zip:
         # create a zip of dataset_path.parent and place it in dataset_path.parent.parent
@@ -221,12 +250,16 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42):
 
     copy_sample = True
     if copy_sample:
+        sample_dir = dataset_path.parent / "samples"
+        os.makedirs(sample_dir, exist_ok=True)
         for fn in refered_files[:10]:
-            shutil.copy(dataset_path / fn , dataset_path.parent)
+            shutil.copy(dataset_path / fn , sample_dir)
 
-    set_trace()
+    print("create zip:")
+    print(f"zip -q -r {dataset_path.parent}.zip {dataset_path.parent}")
+    #set_trace()
     print("done.")
 
 if __name__ == "__main__":
-    dataset_path = Path("/tmp/clevr-act-6/dataset")
-    split_dataset(dataset_path)
+    dataset_path = Path("/tmp/clevr-act-6-fxd-cam")
+    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam")

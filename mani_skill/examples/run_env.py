@@ -1,9 +1,9 @@
 """
 Option 1: record inital frames:
-python run_env.py -e "ClevrMove-v1" --render-mode="rgb_array" 
+python run_env.py 
 
 Option 2: record trajectories
-python run_env.py -e "ClevrMove-v1" --render-mode="rgb_array" -c "pd_joint_pos"
+python run_env.py -d ....
 """
 import gymnasium as gym
 import numpy as np
@@ -31,10 +31,13 @@ from mani_skill.utils.structs import Pose
 import mani_skill.examples.clevr_env  # do import to register env, not used otherwise
 from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb
 from mani_skill.examples.utils_env_interventions import move_object_onto
-from mani_skill.examples.utils_trajectory import project_points, generate_curve_torch, plot_gradient_curve
-from mani_skill.examples.utils_trajectory import clip_and_interpolate
+from mani_skill.examples.utils_trajectory import generate_curve_torch
+from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
+
 
 from pdb import set_trace
+
+RAND_MAX = 2**32 - 1
 
 
 def getMotionPlanner(env):
@@ -50,13 +53,16 @@ def getMotionPlanner(env):
 
 
 def getEncDecFunc(name):
-    if name == "cam-proj-xyzrotvec":
-        from utils_traj_tokens import encode_trajectory_xyzrotvec as enc_func
-        from utils_traj_tokens import decode_trajectory_xyzrotvec as dec_func
-        return enc_func, dec_func
+    if name == "xyzrotvec-cam-proj":
+        from mani_skill.examples.utils_traj_tokens import encode_trajectory_xyzrotvec as enc_func
+        from mani_skill.examples.utils_traj_tokens import decode_trajectory_xyzrotvec as dec_func
+    elif name == "xyzrotvec-rbt":
+        from mani_skill.examples.utils_traj_tokens import encode_trajectory_xyzrotvec_rbt as enc_func
+        from mani_skill.examples.utils_traj_tokens import decode_trajectory_xyzrotvec_rbt as dec_func
+
     else:
         raise ValueError
-
+    return enc_func, dec_func
 
 @dataclass
 class Args:
@@ -93,41 +99,32 @@ class Args:
     quiet: bool = False
     """Disable verbose output."""
 
-    seed: Annotated[Optional[Union[int, List[int]]], tyro.conf.arg(aliases=["-s"])] = None
+    seed: Annotated[Optional[Union[int, List[int], str]], tyro.conf.arg(aliases=["-s"])] = None
     """Seed(s) for random actions and simulator. Can be a single integer or a list of integers. Default is None (no seeds)"""
 
     run_mode: Annotated[Optional[str], tyro.conf.arg(aliases=["-m"])] = "script"
-    """Run a script|interactive|none"""
+    """Run a script|interactive|first. first renders first frame only"""
 
     dataset_path: Annotated[Optional[str], tyro.conf.arg(aliases=["-d"])] = None
     """Save a dataset"""
 
 
-def reset_random(args, force=True):
-    if args.seed is None or force:
-        seed = random.randrange(2**32 - 1)
-        args.seed = [seed]
-    elif isinstance(args.seed, int):
-        args.seed = [args.seed]
-    np.random.seed(args.seed[0])
-
-
-def to_prefix_suffix(obj_start, obj_end, camera, grasp_pose, tcp_pose, action_text, enc_func):
-    _, curve_3d = generate_curve_torch(obj_start.get_p(), obj_end.get_p(), num_points=2)
-    orns_3d = grasp_pose.get_q().clone().detach()  # get rotation
-    orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
-    curve_25d, depth, token_str, didclip_traj = enc_func(curve_3d, orns_3d, camera, return_didclip=True)
-    # encode tcp position in prompt (prefix)
-    _, _, tcp_str, didclip_tcp = enc_func(tcp_pose.get_p().unsqueeze(0), tcp_pose.get_q().unsqueeze(0), camera, return_didclip=True)   
-    prefix = action_text+" "+tcp_str
-    info = dict(didclip_traj=didclip_traj, didclip_tcp=didclip_tcp)
-    return prefix, token_str, curve_3d, orns_3d, info
+def reset_random(args, orig_seeds):
+    if orig_seeds is None:
+        seed = random.randrange(RAND_MAX)
+    elif isinstance(orig_seeds, list):
+        seed = orig_seeds.pop()
+    elif isinstance(orig_seeds, int):
+        seed = orig_seeds        
+    else:
+        raise ValueError
+    args.seed = [seed]
+    np.random.seed(seed)
 
     
-def main(args: Args, vis=True, run_script=True, model=None):
+def iterate_env(args: Args, vis=True, model=None):
     np.set_printoptions(suppress=True, precision=3)
     verbose = not args.quiet
-    reset_random(args)
     parallel_in_single_scene = args.render_mode == "human"
     if args.render_mode == "human" and args.obs_mode in ["sensor_data", "rgb", "rgbd", "depth", "point_cloud"]:
         print("Disabling parallel single scene/GUI render as observation mode is a visual one. Change observation mode to state or state_dict to see a parallel env render")
@@ -149,10 +146,11 @@ def main(args: Args, vis=True, run_script=True, model=None):
         parallel_in_single_scene=parallel_in_single_scene,
         robot_uids="panda_wristcam",  #fetch, panda_wristcam
         scene_dataset="Table",
-        object_dataset="clevr",
+        object_dataset="objaverse",
         # **args.env_kwargs
     )
-    
+    enc_func, dec_func = getEncDecFunc("xyzrotvec-cam-proj")
+
     if args.record_dir:
         env = RecordEpisode(env, args.record_dir, info_on_video=False, save_trajectory=True, max_steps_per_video=env._max_episode_steps)
     
@@ -163,7 +161,9 @@ def main(args: Args, vis=True, run_script=True, model=None):
         print("Reward mode", env.unwrapped.reward_mode)
         print("Render mode", args.render_mode)
 
+    orig_seeds = args.seed
     for _ in range(10**6):    
+        reset_random(args, orig_seeds)
         obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         if args.seed is not None:
             env.action_space.seed(args.seed[0])
@@ -185,12 +185,18 @@ def main(args: Args, vis=True, run_script=True, model=None):
         env.unwrapped.set_goal_pose(obj_end)
         
         camera = env.base_env.scene.human_render_cameras['render_camera'].camera
-        grasp_pose_sapien, _ = get_grasp_pose_and_obb(env)
-        grasp_pose = Pose.create_from_pq(p=grasp_pose_sapien.get_p(), q=grasp_pose_sapien.get_q())
+        grasp_pose, _ = get_grasp_pose_and_obb(env)
+        grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
         tcp_pose = env.unwrapped.agent.tcp.pose
-        
-        enc_func, dec_func = getEncDecFunc("cam-proj-xyzrotvec")
-        prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end, camera, grasp_pose, tcp_pose, action_text, enc_func)
+        robot_pose = env.base_env.agent.robot.get_root_pose()
+
+        #enc_func, dec_func = getEncDecFunc("xyzrotvec-rbt")
+        prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
+                                                                      camera, grasp_pose, tcp_pose,
+                                                                      action_text, enc_func, robot_pose=robot_pose)
+        if "didclip_traj" in info and info["didclip_traj"]:
+            # skip saving this file, we won't use it anyway
+            continue
 
         json_dict = dict(prefix=prefix, suffix=token_str,
                          action_text=action_text,
@@ -198,24 +204,27 @@ def main(args: Args, vis=True, run_script=True, model=None):
                          camera_intrinsic=camera.get_intrinsic_matrix().detach().numpy().tolist(),
                          obj_start_pose=obj_start.raw_pose.detach().numpy().tolist(),
                          obj_end_pose=obj_end.raw_pose.detach().numpy().tolist(),
-                         tcp_start_pose=env.unwrapped.agent.tcp.pose.raw_pose.detach().numpy().tolist(),
+                         robot_pose=robot_pose.raw_pose.detach().numpy().tolist(),
+                         tcp_start_pose=tcp_pose.raw_pose.detach().numpy().tolist(),
                          grasp_pose=grasp_pose.raw_pose.detach().numpy().tolist(),
-                         info=info)
+                         info=info,
+                         seed=args.seed[0])
         
-        encode_decode_trajectory = False
+        encode_decode_trajectory = True
         if encode_decode_trajectory:
-            curve_3d_est, orns_3d_est = dec_func(token_str, camera)
+            curve_3d_est, orns_3d_est = dec_func(token_str, camera, robot_pose=robot_pose)
             curve_3d = curve_3d_est  # set the unparsed trajectory one used for policy
             orns_3d = orns_3d_est
         
         # Evaluate the trajectory
         if args.run_mode == "script" or model:
             assert args.control_mode == "pd_joint_pos"
-            if info["didclip_traj"]:
-                print("Warning out-of-domain sample")
+            if verbose and info["didclip_traj"]:
+                print("Warning refered object out of camera view.")
                 
             if model:
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
+                set_trace()
                 curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera)
                 curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
                 orns_3d = orns_3d_pred
@@ -223,8 +232,8 @@ def main(args: Args, vis=True, run_script=True, model=None):
             # convert two keypoints into motion sequence
             assert curve_3d.shape[1] == 2 and orns_3d.shape[1] == 2  # start and stop poses
             _, curve_3d_i = generate_curve_torch(curve_3d[:, 0], curve_3d[:, -1], num_points=3)
-            grasp_pose_sapien = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
-            reach_pose = grasp_pose_sapien * sapien.Pose([0, 0, -0.05])
+            grasp_pose = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
+            reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
             lift_pose = Pose.create_from_pq(p=curve_3d_i[:, 1], q=orns_3d[:, 1])
             align_pose = Pose.create_from_pq(p=curve_3d_i[:, 2], q=orns_3d[:, 1])
 
@@ -240,20 +249,22 @@ def main(args: Args, vis=True, run_script=True, model=None):
             )
             
             planner.move_to_pose_with_screw(reach_pose)
-            planner.move_to_pose_with_screw(grasp_pose_sapien)
+            planner.move_to_pose_with_screw(grasp_pose)
             planner.close_gripper()
             planner.move_to_pose_with_screw(lift_pose)
             planner.move_to_pose_with_screw(align_pose)
             planner.open_gripper()
-            print("reward", env.unwrapped.eval_reward()[0])
+            final_reward = env.unwrapped.eval_reward()[0]
             planner.close()
+            json_dict["reward"] = float(final_reward)
+            if verbose:
+                print(f"reward {final_reward:0.2f} seed", args.seed[0])
 
         elif args.run_mode == "interactive":
             run_interactive(env)
-
-        elif args.run_mode == "none":
+        elif args.run_mode == "first":
+            # only render first frame
             pass
-
         else:
             raise ValueError
 
@@ -262,9 +273,8 @@ def main(args: Args, vis=True, run_script=True, model=None):
             video_name =  f"CLEVR_{str(args.seed[0]).zfill(10)}"
             env.flush_video(name=video_name, save=True)
 
-        # roll dice
-        reset_random(args, force=True)
         yield image_before, json_dict, args.seed[0]
+
 
     env.close()
 
@@ -305,7 +315,7 @@ def save_dataset(sample_generator, N: int, dataset_path):
     N_cur = get_num_lines()
     N_remaining = N - N_cur
     annotations = []
-    for i in tqdm(range(N_remaining)):
+    for i in tqdm(range(N_remaining),total=N_remaining):
         image_before, json_dict, rnd_seed = next(sample_generator)
         sample_name = str(rnd_seed).zfill(10)
         image_filename = f"CLEVR_{sample_name}.jpg"
@@ -323,12 +333,24 @@ if __name__ == "__main__":
     parsed_args = tyro.cli(Args)
     dataset_path = parsed_args.dataset_path
 
+    if isinstance(parsed_args.seed, str):
+        import json
+        with open(parsed_args.seed, "r") as f_obj:
+            seeds = json.load(f_obj)
+            parsed_args.seed = seeds
+
     if dataset_path is None:
-        env_iter = main(parsed_args, vis=True)
+        env_iter = iterate_env(parsed_args, vis=True)
         while True:
             _ = next(env_iter)
     else:
+        N_samples = int(150000/0.8)
+        #N_samples = int(10/0.8)
+        parsed_args.run_mode = "first"
+        if isinstance(parsed_args.seed, int):
+            rng = np.random.default_rng(parsed_args.seed)
+            parsed_args.seed = rng.integers(0, RAND_MAX, N_samples).tolist()
+        dataset_path = Path(dataset_path)
         os.makedirs(dataset_path, exist_ok=True)
-        N_samples = 1000/0.8
-        save_dataset(main(parsed_args, vis=False), N=int(N_samples), dataset_path=dataset_path)
+        save_dataset(iterate_env(parsed_args, vis=False), N=int(N_samples), dataset_path=dataset_path)
         
