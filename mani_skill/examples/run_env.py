@@ -2,8 +2,8 @@
 Option 1: record inital frames:
 python run_env.py 
 
-Option 2: record trajectories
-python run_env.py -d ....
+Option 2: record trajectories (e.g. with rt shader)
+python run_env.py -d /tmp/clevr-act-8-objaverse-rt --shader=rt
 """
 import gymnasium as gym
 import numpy as np
@@ -144,9 +144,9 @@ def iterate_env(args: Args, vis=True, model=None):
         num_envs=args.num_envs,
         sim_backend=args.sim_backend,
         parallel_in_single_scene=parallel_in_single_scene,
-        robot_uids="panda_wristcam",  #fetch, panda_wristcam
-        scene_dataset="Table",
-        object_dataset="objaverse",
+        robot_uids="fetch",  #fetch, panda_wristcam
+        scene_dataset="ProcTHOR", # Table, ProcTHOR
+        object_dataset="objaverse", # clevr, ycb, objaverse
         # **args.env_kwargs
     )
     enc_func, dec_func = getEncDecFunc("xyzrotvec-cam-proj")
@@ -196,7 +196,8 @@ def iterate_env(args: Args, vis=True, model=None):
                                                                       action_text, enc_func, robot_pose=robot_pose)
         if "didclip_traj" in info and info["didclip_traj"]:
             # skip saving this file, we won't use it anyway
-            continue
+            #continue
+            pass
 
         json_dict = dict(prefix=prefix, suffix=token_str,
                          action_text=action_text,
@@ -344,8 +345,8 @@ if __name__ == "__main__":
         while True:
             _ = next(env_iter)
     else:
-        N_samples = int(150000/0.8)
-        #N_samples = int(10/0.8)
+        #N_samples = int(150000/0.8)
+        N_samples = int(20/0.8)
         parsed_args.run_mode = "first"
         if isinstance(parsed_args.seed, int):
             rng = np.random.default_rng(parsed_args.seed)

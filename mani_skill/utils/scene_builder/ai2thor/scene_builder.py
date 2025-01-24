@@ -125,6 +125,7 @@ class AI2THORBaseSceneBuilder(SceneBuilder):
         self.movable_objects: Dict[str, Actor] = dict()
         self.articulations: Dict[str, Articulation] = dict()
         self._default_object_poses: List[Tuple[Actor, sapien.Pose]] = []
+        self._default_scene_objects_poses: List[Tuple[Actor, sapien.Pose]] = []
 
         # keep track of background objects separately as we need to disable mobile robot collisions
         # note that we will create a merged actor using these objects to represent the bg
@@ -209,6 +210,7 @@ class AI2THORBaseSceneBuilder(SceneBuilder):
                     builder.initial_pose = pose
                     builder.set_scene_idxs(env_idx)
                     actor = builder.build_static(name=f"{unique_id}_{actor_name}")
+                    self._default_scene_objects_poses.append((actor, pose))
                 else:
                     position = [
                         object["translation"][0],

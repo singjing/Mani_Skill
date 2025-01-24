@@ -31,7 +31,6 @@ class StackCubeEnv(BaseEnv):
 
     agent: Union[Panda, Fetch]
 
-    OBJECT_REGION = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
 
 
     def __init__(
@@ -40,6 +39,7 @@ class StackCubeEnv(BaseEnv):
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.scene_dataset = scene_dataset
         self.object_dataset = object_dataset
+        object_region = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
 
         # cached stuff for loaders
         self.objaverse_model_ids = None
@@ -78,8 +78,14 @@ class StackCubeEnv(BaseEnv):
         r, phi, z = randomization.uniform(cylinder_l, cylinder_h, size=(3,)).cpu().numpy().astype(float)
         # print(r, phi, z)
         start_p = [r * np.cos(phi), r * np.sin(phi), z]
-        end_p = randomization.uniform(*zip(*self.OBJECT_REGION),size=(3,)).cpu().numpy().astype(float)
-        pose = sapien_utils.look_at(start_p, end_p)    
+        end_p = randomization.uniform(*zip(*self.object_region),size=(3,)).cpu().numpy().astype(float)
+        
+        # TODO(max): fix this
+        if self.scene_dataset == "ProcTHOR":
+            start_p = (np.array(start_p) + np.array(end_p)).tolist()
+
+        pose = sapien_utils.look_at(start_p, end_p)
+        print("look at", start_p, end_p)
         return CameraConfig("render_camera", pose, 448, 448, 1, 0.01, 100)
 
     @property
@@ -201,25 +207,36 @@ class StackCubeEnv(BaseEnv):
             self.objaverse_files = dict([(x.stem, x) for x in glb_files])
         
         uids_list = sorted(list(self.objaverse_files.keys()))
-        model_ids = randomization.uniform(0.0, float(len(self.objaverse_files)), size=(num_objects,)).cpu().numpy().astype(int)
-        model_uids = [uids_list[x] for x in model_ids]
-        model_uids = ['b5c9d06f19be4c92a1708515f6655573','412ed49af0644f30bae822d29afbb066']
         OBJAVERSE_SCALES = {
             'b5c9d06f19be4c92a1708515f6655573':.02,
-            '412ed49af0644f30bae822d29afbb066':.002
+            '412ed49af0644f30bae822d29afbb066':.001,
+            '088c1883e07e4946956488171e3a06bf':.1,
+            '93128128f8f848d8bd261f6c1f763a53':.005
+            
         }
+        uids_list = sorted(list(OBJAVERSE_SCALES.keys()))
+
+
+        model_ids = randomization.uniform(0.0, float(len(uids_list)), size=(num_objects,)).cpu().numpy().astype(int)
+        model_uids = [uids_list[x] for x in model_ids]
+        #model_uids = ['b5c9d06f19be4c92a1708515f6655573','412ed49af0644f30bae822d29afbb066']
+        #model_uids = ['dd1670983c134cdc8bc5a61dadaf343a', 'b5c9d06f19be4c92a1708515f6655573',]
         for i, uid in enumerate(model_uids):
             #model_id = self.objaverse_model_ids[model_idx]
             model_name = "xxx"
             filename = self.objaverse_files[uid]
-            builder = get_objaverse_builder(self.scene, filename, scale=OBJAVERSE_SCALES[uid])
+            try:
+                scale = OBJAVERSE_SCALES[uid]
+            except KeyError:
+                scale = .02
+            builder = get_objaverse_builder(self.scene, filename, scale=scale)
             builder.initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
             self.objects.append(builder.build(name=f"{model_name}-{i}"))
             self.objects_descr.append(dict(size="", color="", shape=model_name))
 
             from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
             print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
-        
+        #set_trace()
         unique_vals, counts = np.unique(model_ids, return_counts=True)
         count_dict = dict(zip(unique_vals, counts))
         self.objects_unique = [count_dict[num] == 1 for num in model_ids]
@@ -234,6 +251,25 @@ class StackCubeEnv(BaseEnv):
         elif self.scene_dataset == "ProcTHOR":
             self.table_scene = ProcTHORSceneBuilder(env=self, robot_init_qpos_noise=self.robot_init_qpos_noise)
             self.table_scene.build(build_config_idxs=0)
+
+            ref_item = self.table_scene.scene_objects["env-0_objects/Toaster_6_2"]
+            ref_pose = dict(self.table_scene._default_scene_objects_poses)[ref_item]
+            region_pos = ref_pose.get_p()
+            print("ref pose", region_pos)
+            extents = [.1, .1, 0]
+            region = [region_pos + extents, region_pos - extents]
+            self.object_region = np.array(region).T.tolist()
+            ref_item.remove_from_scene()
+
+            ray_traced_lighting = self._custom_human_render_camera_configs.get("shader_pack",None) in ["rt","rt-fast"]
+            self.scene.set_ambient_light([3 if ray_traced_lighting else 0.3] * 3)
+
+            color = np.array([1.0, 0.8, 0.5]) * (10 if ray_traced_lighting else 2)
+            # entrance
+            self.scene.add_point_light([region_pos[0], region_pos[1], 2.3], color=color)
+
+            #set_trace()
+            
         else:
             raise ValueError
 
@@ -253,6 +289,7 @@ class StackCubeEnv(BaseEnv):
         else:
             raise ValueError
         
+        #set_trace()
 
         self.cubeA = self.objects[0]  
         self.cubeB = self.objects[1]
@@ -263,14 +300,24 @@ class StackCubeEnv(BaseEnv):
             self.table_scene.initialize(env_idx)
 
             xyz = torch.zeros((b, 3))
-            xyz[:, 2] = 0.02
-            xy = torch.rand((b, 2)) * 0.2 - 0.1
+            if self.scene_dataset == "ProcTHOR":
+                xyz[:, 2] = self.object_region[2][0]
+            else:
+                xyz[:, 2] = 0.02
+                xy = torch.rand((b, 2)) * 0.2 - 0.1
 
-            sampler = randomization.UniformPlacementSampler(bounds=self.OBJECT_REGION[:2], batch_size=b)
+            sampler = randomization.UniformPlacementSampler(bounds=self.object_region[:2], batch_size=b)
             radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001
             for shape, descr in zip(self.objects, self.objects_descr):
-                shape_xy = xy + sampler.sample(radius, max_trials=100)
-                xyz[:, :2] = shape_xy
+                if self.scene_dataset == "ProcTHOR":
+                    region_mins = [x[0] for x in self.object_region]
+                    region_maxs = [x[1] for x in self.object_region]
+                    xyz[:,] = randomization.uniform(region_mins, region_maxs, size=(1,))
+                    xyz[:,2] += 0.02
+                    #set_trace()
+                else:
+                    shape_xy = xy + sampler.sample(radius, max_trials=100)
+                    xyz[:, :2] = shape_xy
                 #xyz[:, 2] = self.sizes[descr["size"]]
                 #xyz[:, 2] = 0
                 qs = randomization.random_quaternions(
