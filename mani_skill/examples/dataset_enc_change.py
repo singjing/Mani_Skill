@@ -42,7 +42,9 @@ def encode_actions(label, stats=None, encoding="xyzrotvec-cam", i=None):
     """
     This code should be similar to that in gen_dataset.py
     """
-    camera = DummyCamera(label["camera_intrinsic"], label["camera_extrinsic"])
+    raise ValueError
+    width, height = 
+    camera = DummyCamera(label["camera_intrinsic"], label["camera_extrinsic"], width, height)
     obj_start_pose = Pose(raw_pose=torch.tensor(label["obj_start_pose"]))
     obj_end_pose = Pose(raw_pose=torch.tensor(label["obj_end_pose"]))
     grasp_pose = Pose(raw_pose=torch.tensor(label["grasp_pose"]))

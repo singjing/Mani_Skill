@@ -44,7 +44,7 @@ def project_point(camera, point_3d):
     return point_image_n
 
 class DummyCamera:
-    def __init__(self, intrinsic_matrix, extrinsic_matrix, width=448, height=448):
+    def __init__(self, intrinsic_matrix, extrinsic_matrix, width, height):
         self.intrinsic_matrix = torch.tensor(intrinsic_matrix)
         self.extrinsic_matrix = torch.tensor(extrinsic_matrix)
         self.width = width
@@ -227,8 +227,8 @@ from scipy.spatial.transform import Rotation as R
 
 
 def are_orns_close(orns_3d, orns_3d_est, tol_degrees=0.4, return_max_diff=False):
-    orns_R = R.from_quat(orns_3d.view(-1,4), scalar_first=True)
-    orns_est_R = R.from_quat(orns_3d_est.view(-1,4), scalar_first=True)
+    orns_R = R.from_quat(orns_3d.view(-1, 4), scalar_first=True)
+    orns_est_R = R.from_quat(orns_3d_est.view(-1, 4), scalar_first=True)
     magnitude_radians = torch.tensor((orns_est_R * orns_R.inv()).magnitude()).float()
     angle_degrees = magnitude_radians * (180.0 / torch.pi)
     all_close = torch.allclose(angle_degrees, torch.zeros_like(angle_degrees), atol=tol_degrees)

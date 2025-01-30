@@ -33,7 +33,7 @@ from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb
 from mani_skill.examples.utils_env_interventions import move_object_onto
 from mani_skill.examples.utils_trajectory import generate_curve_torch
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
-
+from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
 
 from pdb import set_trace
 
@@ -52,24 +52,13 @@ def getMotionPlanner(env):
     return RobotArmMotionPlanningSolver
 
 
-def getEncDecFunc(name):
-    if name == "xyzrotvec-cam-proj":
-        from mani_skill.examples.utils_traj_tokens import encode_trajectory_xyzrotvec as enc_func
-        from mani_skill.examples.utils_traj_tokens import decode_trajectory_xyzrotvec as dec_func
-    elif name == "xyzrotvec-rbt":
-        from mani_skill.examples.utils_traj_tokens import encode_trajectory_xyzrotvec_rbt as enc_func
-        from mani_skill.examples.utils_traj_tokens import decode_trajectory_xyzrotvec_rbt as dec_func
-
-    else:
-        raise ValueError
-    return enc_func, dec_func
 
 @dataclass
 class Args:
     env_id: Annotated[str, tyro.conf.arg(aliases=["-e"])] = "ClevrMove-v1"
     """The environment ID of the task you want to simulate"""
 
-    obs_mode: Annotated[str, tyro.conf.arg(aliases=["-o"])] = "none"
+    obs_mode: Annotated[str, tyro.conf.arg(aliases=["-o"])] = "rgb+depth+segmentation"
     """Observation mode"""
 
     sim_backend: Annotated[str, tyro.conf.arg(aliases=["-b"])] = "auto"
@@ -104,9 +93,6 @@ class Args:
 
     run_mode: Annotated[Optional[str], tyro.conf.arg(aliases=["-m"])] = "script"
     """Run a script|interactive|first. first renders first frame only"""
-
-    dataset_path: Annotated[Optional[str], tyro.conf.arg(aliases=["-d"])] = None
-    """Save a dataset"""
 
 
 def reset_random(args, orig_seeds):
@@ -144,15 +130,17 @@ def iterate_env(args: Args, vis=True, model=None):
         num_envs=args.num_envs,
         sim_backend=args.sim_backend,
         parallel_in_single_scene=parallel_in_single_scene,
-        robot_uids="fetch",  #fetch, panda_wristcam
-        scene_dataset="ProcTHOR", # Table, ProcTHOR
-        object_dataset="objaverse", # clevr, ycb, objaverse
+        robot_uids="panda_wristcam",  #fetch, panda_wristcam
+        scene_dataset="Table", # Table, ProcTHOR
+        object_dataset="clevr", # clevr, ycb, objaverse
         # **args.env_kwargs
     )
-    enc_func, dec_func = getEncDecFunc("xyzrotvec-cam-proj")
 
     if args.record_dir:
-        env = RecordEpisode(env, args.record_dir, info_on_video=False, save_trajectory=True, max_steps_per_video=env._max_episode_steps)
+        env = RecordEpisode(env, args.record_dir, info_on_video=False, 
+                            save_trajectory=True, max_steps_per_video=env._max_episode_steps,
+                            save_on_reset=True,
+                            record_env_state=True)
     
     if verbose:
         print("Observation space", env.observation_space)
@@ -160,6 +148,13 @@ def iterate_env(args: Args, vis=True, model=None):
         print("Control mode", env.unwrapped.control_mode)
         print("Reward mode", env.unwrapped.reward_mode)
         print("Render mode", args.render_mode)
+        print("Obs mode", args.obs_mode)
+
+    filter_visible = True
+    action_encoder = "xyzrotvec-cam-proj"
+    enc_func, dec_func = getActionEncDecFunction(action_encoder)
+    print("filter visible objects", filter_visible)
+    print("action encoder", action_encoder)
 
     orig_seeds = args.seed
     for _ in range(10**6):    
@@ -175,10 +170,18 @@ def iterate_env(args: Args, vis=True, model=None):
         else:
             env.render()
 
+        # Note: overwriting _default_sensor_configs in env with camera called "render_camera"
+
         env_idx = 0
-        # get before image (randomization of human_render_camera is done by clevr_env.py)
+        # get image before intervention (randomization of human_render_camera is done by clevr_env.py)
+        
+        #-----
+        # Warning, taking an image form obs/rendering it results in different calibrations!
+        #----
         images = env.base_env.scene.get_human_render_camera_images('render_camera')
         image_before = images['render_camera'][env_idx].numpy()
+        #image_before = obs['sensor_data']['render_camera']['rgb'][0].detach().numpy()
+        assert image_before.shape == (448, 448, 3)
 
         # do intervention (this will set env.base_env.cubeA onto cubeB)
         obj_start, obj_end, action_text = move_object_onto(env, pretend=True)
@@ -194,10 +197,9 @@ def iterate_env(args: Args, vis=True, model=None):
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                       camera, grasp_pose, tcp_pose,
                                                                       action_text, enc_func, robot_pose=robot_pose)
-        if "didclip_traj" in info and info["didclip_traj"]:
-            # skip saving this file, we won't use it anyway
-            #continue
-            pass
+        # skip saving this file, we won't use it anyway
+        if filter_visible and info["didclip_traj"]:
+            continue
 
         json_dict = dict(prefix=prefix, suffix=token_str,
                          action_text=action_text,
@@ -225,7 +227,7 @@ def iterate_env(args: Args, vis=True, model=None):
                 
             if model:
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
-                set_trace()
+                json_dict["prediction"] = token_pred
                 curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera)
                 curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
                 orns_3d = orns_3d_pred
@@ -270,7 +272,17 @@ def iterate_env(args: Args, vis=True, model=None):
             raise ValueError
 
         if args.record_dir:
-            env.flush_trajectory(save=True)
+            try:
+                seg = env._trajectory_buffer.observation['sensor_data']['render_camera']['segmentation']
+                if seg.max() <= 255:
+                    seg = seg.astype(np.uint8)
+                env._trajectory_buffer.observation['sensor_data']['render_camera']['segmentation'] = seg
+            except KeyError:
+                pass
+
+            #set_trace()
+            # keep the transition from reset (which does not have an action)
+            env.flush_trajectory(save=True, ignore_empty_transition=False)
             video_name =  f"CLEVR_{str(args.seed[0]).zfill(10)}"
             env.flush_video(name=video_name, save=True)
 
@@ -288,6 +300,9 @@ def run_interactive(env):
 
 
 def save_dataset(sample_generator, N: int, dataset_path):
+    dataset_path = dataset_path / "dataset"
+    os.makedirs(dataset_path, exist_ok=True)
+
     # Initialize a ThreadPoolExecutor with one or more workers
     executor = ThreadPoolExecutor(max_workers=3)
     def save_image(image, path) -> None:
@@ -313,15 +328,17 @@ def save_dataset(sample_generator, N: int, dataset_path):
         else:
             return 0
         
-    N_cur = get_num_lines()
+    #N_cur = get_num_lines()
+    N_cur = 0
     N_remaining = N - N_cur
     annotations = []
     for i in tqdm(range(N_remaining),total=N_remaining):
         image_before, json_dict, rnd_seed = next(sample_generator)
         sample_name = str(rnd_seed).zfill(10)
-        image_filename = f"CLEVR_{sample_name}.jpg"
-        json_dict["image"] = image_filename
-        save_image_async(image_before, dataset_path / image_filename)
+        if image_before is not None:
+            image_filename = f"CLEVR_{sample_name}.jpg"
+            json_dict["image"] = image_filename
+            save_image_async(image_before, dataset_path / image_filename)
         annotations.append(json_dict)
         if i % 100 == 0:
             save_labels(annotations)
@@ -332,7 +349,7 @@ def save_dataset(sample_generator, N: int, dataset_path):
 
 if __name__ == "__main__":
     parsed_args = tyro.cli(Args)
-    dataset_path = parsed_args.dataset_path
+    dataset_path = parsed_args.record_dir
 
     if isinstance(parsed_args.seed, str):
         import json
@@ -345,8 +362,9 @@ if __name__ == "__main__":
         while True:
             _ = next(env_iter)
     else:
-        #N_samples = int(150000/0.8)
-        N_samples = int(20/0.8)
+        N_samples = int(140_000+10_000)
+        #N_samples = int(2/0.8)
+        #N_samples = 20
         parsed_args.run_mode = "first"
         if isinstance(parsed_args.seed, int):
             rng = np.random.default_rng(parsed_args.seed)

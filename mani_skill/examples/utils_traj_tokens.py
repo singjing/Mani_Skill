@@ -402,7 +402,7 @@ def encode_trajectory_xyzrotvec_rbt(curve_3d, orns_3d, camera, robot_pose=None, 
     return None, None, result
 
 
-def decode_caption_xyzrotvec_rbt(caption, camera):
+def decode_caption_xyzrotvec_rbt(caption, camera=None):
     """
     Takes a trajectory string and converts it into curve_25d, quat_c
     """
@@ -431,16 +431,24 @@ def decode_caption_xyzrotvec_rbt(caption, camera):
     return pos_r, quat_r
 
 
-def decode_trajectory_xyzrotvec_rbt(caption, camera, robot_pose=None):
+def decode_trajectory_xyzrotvec_rbt(caption, camera=None, robot_pose=None):
     """
     Takes a caption string and converts it to world coordinates
     """
     assert isinstance(robot_pose, Pose)
-    pos_r, quat_r = decode_caption_xyzrotvec_rbt(caption, camera)
+    pos_r, quat_r = decode_caption_xyzrotvec_rbt(caption, camera=None)
     pose_r = Pose.create_from_pq(p=pos_r, q=quat_r)    
     poses = robot_pose * pose_r
     return poses.get_p().unsqueeze(0), poses.get_q().unsqueeze(0)
 
+
+def getActionEncDecFunction(name):
+    if name == "xyzrotvec-cam-proj":
+        return encode_trajectory_xyzrotvec, decode_trajectory_xyzrotvec
+    elif name == "xyzrotvec-rbt":
+        return encode_trajectory_xyzrotvec_rbt, decode_trajectory_xyzrotvec_rbt
+    else:
+        raise ValueError
 
 
 def check_encode_decode():

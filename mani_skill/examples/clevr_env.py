@@ -39,7 +39,9 @@ class StackCubeEnv(BaseEnv):
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.scene_dataset = scene_dataset
         self.object_dataset = object_dataset
-        object_region = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
+        self.object_region = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
+        #self.cam_size = 224
+        self.cam_size = 448
 
         # cached stuff for loaders
         self.objaverse_model_ids = None
@@ -57,8 +59,13 @@ class StackCubeEnv(BaseEnv):
         
     @property
     def _default_sensor_configs(self):
-        pose = self.base_camera_pose()
-        return [CameraConfig("base_camera", pose, 128, 128, np.pi / 2, 0.01, 100)]
+        #pose = self.base_camera_pose()
+        #return [CameraConfig("base_camera", pose, 128, 128, np.pi / 2, 0.01, 100)]
+        if self.RANDOMIZE_VIEW:
+            return self._default_human_render_camera_configs_random
+        else:
+            return self._default_human_render_camera_configs_fixed
+
 
     @property
     def _default_human_render_camera_configs_fixed(self):
@@ -67,7 +74,7 @@ class StackCubeEnv(BaseEnv):
         t = 0.5
         new_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
         pose = sapien_utils.look_at(new_p, end_p)
-        return CameraConfig("render_camera", pose, 448, 448, 1, 0.01, 100)
+        return CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
 
     @property
     def _default_human_render_camera_configs_random(self):
@@ -85,8 +92,7 @@ class StackCubeEnv(BaseEnv):
             start_p = (np.array(start_p) + np.array(end_p)).tolist()
 
         pose = sapien_utils.look_at(start_p, end_p)
-        print("look at", start_p, end_p)
-        return CameraConfig("render_camera", pose, 448, 448, 1, 0.01, 100)
+        return CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
 
     @property
     def _default_human_render_camera_configs(self):
@@ -220,7 +226,7 @@ class StackCubeEnv(BaseEnv):
         model_ids = randomization.uniform(0.0, float(len(uids_list)), size=(num_objects,)).cpu().numpy().astype(int)
         model_uids = [uids_list[x] for x in model_ids]
         #model_uids = ['b5c9d06f19be4c92a1708515f6655573','412ed49af0644f30bae822d29afbb066']
-        #model_uids = ['dd1670983c134cdc8bc5a61dadaf343a', 'b5c9d06f19be4c92a1708515f6655573',]
+        model_uids = ['00bfa4e5862d4d4b89f9bcf06d2a19e4', 'b5c9d06f19be4c92a1708515f6655573',]
         for i, uid in enumerate(model_uids):
             #model_id = self.objaverse_model_ids[model_idx]
             model_name = "xxx"
@@ -268,7 +274,6 @@ class StackCubeEnv(BaseEnv):
             # entrance
             self.scene.add_point_light([region_pos[0], region_pos[1], 2.3], color=color)
 
-            #set_trace()
             
         else:
             raise ValueError
