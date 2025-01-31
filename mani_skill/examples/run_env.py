@@ -94,6 +94,10 @@ class Args:
     run_mode: Annotated[Optional[str], tyro.conf.arg(aliases=["-m"])] = "script"
     """Run a script|interactive|first. first renders first frame only"""
 
+    action_encoder: Annotated[Optional[str], tyro.conf.arg(aliases=["-ae"])] = "xyzrotvec-cam-proj"
+    """Action encoding"""
+
+
 
 def reset_random(args, orig_seeds):
     if orig_seeds is None:
@@ -130,8 +134,8 @@ def iterate_env(args: Args, vis=True, model=None):
         num_envs=args.num_envs,
         sim_backend=args.sim_backend,
         parallel_in_single_scene=parallel_in_single_scene,
-        robot_uids="panda_wristcam",  #fetch, panda_wristcam
-        scene_dataset="Table", # Table, ProcTHOR
+        robot_uids="fetch",  #fetch, panda_wristcam
+        scene_dataset="ProcTHOR", # Table, ProcTHOR
         object_dataset="clevr", # clevr, ycb, objaverse
         # **args.env_kwargs
     )
@@ -151,10 +155,9 @@ def iterate_env(args: Args, vis=True, model=None):
         print("Obs mode", args.obs_mode)
 
     filter_visible = True
-    action_encoder = "xyzrotvec-cam-proj"
-    enc_func, dec_func = getActionEncDecFunction(action_encoder)
+    enc_func, dec_func = getActionEncDecFunction(args.action_encoder)
     print("filter visible objects", filter_visible)
-    print("action encoder", action_encoder)
+    print("action encoder", args.action_encoder)
 
     orig_seeds = args.seed
     for _ in range(10**6):    
@@ -228,7 +231,7 @@ def iterate_env(args: Args, vis=True, model=None):
             if model:
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
                 json_dict["prediction"] = token_pred
-                curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera)
+                curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera=camera, robot_pose=robot_pose)
                 curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
                 orns_3d = orns_3d_pred
 
@@ -293,6 +296,8 @@ def iterate_env(args: Args, vis=True, model=None):
 
 
 def run_interactive(env):
+    env.print_sim_details()
+
     print("Entering do nothing loop.")
     while True:
         time.sleep(.1)

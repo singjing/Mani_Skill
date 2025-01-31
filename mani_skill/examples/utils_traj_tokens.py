@@ -257,7 +257,7 @@ def decode_caption_xyzrotvec_partial(caption, camera):
     return curve_25d, quat_c
 
 
-def decode_trajectory_xyzrotvec_partial(caption, camera):
+def decode_trajectory_xyzrotvec_partial(caption, camera=None, robot_pose=None):
     """
     Takes a caption string and converts it to world coordinates
     """
@@ -317,7 +317,7 @@ def encode_trajectory_xyzrotvec(curve_3d, orns_3d, camera, robot_pose=None, retu
     return curve_2d_short, depth, result
 
 
-def decode_caption_xyzrotvec(caption, camera):
+def decode_caption_xyzrotvec(caption, camera=None, robot_pose=None):
     """
     Takes a trajectory string and converts it into curve_25d, quat_c
     """
@@ -344,7 +344,7 @@ def decode_caption_xyzrotvec(caption, camera):
     return curve_25d, quat_c
 
 
-def decode_trajectory_xyzrotvec(caption, camera, robot_pose=None):
+def decode_trajectory_xyzrotvec(caption, camera=None, robot_pose=None):
     """
     Takes a caption string and converts it to world coordinates
     """
@@ -402,7 +402,7 @@ def encode_trajectory_xyzrotvec_rbt(curve_3d, orns_3d, camera, robot_pose=None, 
     return None, None, result
 
 
-def decode_caption_xyzrotvec_rbt(caption, camera=None):
+def decode_caption_xyzrotvec_rbt(caption, camera=None, robot_pose=None):
     """
     Takes a trajectory string and converts it into curve_25d, quat_c
     """

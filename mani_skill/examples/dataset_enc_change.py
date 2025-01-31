@@ -1,22 +1,22 @@
+import os
 import json
 import random
 import shutil
 from pathlib import Path
-from tqdm import tqdm
+
 import numpy as np
 import torch
+from tqdm import tqdm
+from PIL import Image
+
 from mani_skill.utils.structs.pose import Pose
 from utils_trajectory import DummyCamera, generate_curve_torch
-import os
-
-
 from utils_trajectory import are_orns_close
 from utils_traj_tokens import to_prefix_suffix
 from utils_traj_tokens import encode_trajectory_xyz
 from utils_traj_tokens import encode_trajectory_xyzrotvec 
 from utils_traj_tokens import decode_trajectory_xyzrotvec 
 from utils_traj_tokens import encode_trajectory_xyzrotvec_rbt
-
 
 from pdb import set_trace
 
@@ -38,18 +38,17 @@ def check_and_fix_format(label):
     if '<loc-' in label["prefix"]:
         print("found <loc- in", label["suffix"])
 
-def encode_actions(label, stats=None, encoding="xyzrotvec-cam", i=None):
+def encode_actions(label, stats=None, encoding="xyzrotvec-cam", i=None, dataset_path=None):
     """
     This code should be similar to that in gen_dataset.py
     """
-    raise ValueError
-    width, height = 
+    img_path = dataset_path / label["image"]
+    width, height = Image.open(img_path).size
     camera = DummyCamera(label["camera_intrinsic"], label["camera_extrinsic"], width, height)
     obj_start_pose = Pose(raw_pose=torch.tensor(label["obj_start_pose"]))
     obj_end_pose = Pose(raw_pose=torch.tensor(label["obj_end_pose"]))
     grasp_pose = Pose(raw_pose=torch.tensor(label["grasp_pose"]))
     tcp_pose = Pose(raw_pose=torch.tensor(label["tcp_start_pose"]))
-    robot_pose = Pose(raw_pose=torch.tensor(label["robot_pose"]))
     action_text = label["action_text"]
 
     
@@ -65,6 +64,8 @@ def encode_actions(label, stats=None, encoding="xyzrotvec-cam", i=None):
         curve_2d, depth, curve_tokens = encode_trajectory_xyz(curve_3d, camera)
 
     elif encoding == "xyzrotvec-rbt":  # xyz-rotation vector in robot coordinates
+        robot_pose = Pose(raw_pose=torch.tensor(label["robot_pose"]))
+
         prefix, suffix, _, _, info = to_prefix_suffix(obj_start_pose, obj_end_pose, camera, grasp_pose, tcp_pose, action_text, encode_trajectory_xyzrotvec_rbt,
                                                       robot_pose=robot_pose)
         label["prefix"] = prefix
@@ -159,13 +160,13 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42,
             continue
         
         # check visibility, bit of a hack as it's done via camera encoding
-        encode_actions(label, stats, i=i, encoding="xyzrotvec-cam")
+        encode_actions(label, stats, i=i, encoding="xyzrotvec-cam", dataset_path=dataset_path)
         if filter_visible:
             if label['enc-info']['didclip_traj']:# or label['enc-info']['didclip_tcp']:
                 continue
 
         if action_encoding != "xyzrotvec-cam":
-            encode_actions(label, stats, i=i, encoding=action_encoding)
+            encode_actions(label, stats, i=i, encoding=action_encoding, dataset_path=dataset_path)
 
         check_and_fix_format(label)
 
@@ -263,5 +264,8 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42,
     print("done.")
 
 if __name__ == "__main__":
-    dataset_path = Path("/tmp/clevr-act-6-fxd-cam")
-    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam")
+    # dataset_path = Path("/tmp/clevr-act-6-fxd-cam")
+    # split_dataset(dataset_path, action_encoding = "xyzrotvec-cam")
+
+    dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v1")
+    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam", train_ratio=0)
