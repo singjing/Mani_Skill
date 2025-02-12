@@ -14,7 +14,8 @@ from utils_trajectory import DummyCamera, generate_curve_torch
 from utils_trajectory import are_orns_close
 from utils_traj_tokens import to_prefix_suffix
 from utils_traj_tokens import encode_trajectory_xyz
-from utils_traj_tokens import encode_trajectory_xyzrotvec 
+from utils_traj_tokens import encode_trajectory_xyzrotvec
+from utils_traj_tokens import encode_trajectory_xyzrotvec2
 from utils_traj_tokens import decode_trajectory_xyzrotvec 
 from utils_traj_tokens import encode_trajectory_xyzrotvec_rbt
 
@@ -68,6 +69,13 @@ def encode_actions(label, stats=None, encoding="xyzrotvec-cam", i=None, dataset_
 
         prefix, suffix, _, _, info = to_prefix_suffix(obj_start_pose, obj_end_pose, camera, grasp_pose, tcp_pose, action_text, encode_trajectory_xyzrotvec_rbt,
                                                       robot_pose=robot_pose)
+        label["prefix"] = prefix
+        label["suffix"] = suffix
+        label["enc-info"].update(info)
+
+    elif encoding == "xyzrotvec-cam2":  # xyz-rotation vector in camera coorinates, should be called uvd-rotvec
+        prefix, suffix, _, _, info = to_prefix_suffix(obj_start_pose, obj_end_pose, camera, grasp_pose, tcp_pose, action_text, encode_trajectory_xyzrotvec2,
+                                                      robot_pose=None)
         label["prefix"] = prefix
         label["suffix"] = suffix
         label["enc-info"].update(info)
@@ -128,11 +136,12 @@ def split_dataset(dataset_path: Path, train_ratio: float = 0.8, seed: int = 42,
     print("Loading", dataset_path)
     print("creating encoding", action_encoding)
 
+    dataset_parent = dataset_path
     dataset_path = dataset_path / "dataset"
     # Define paths for train and test files
-    json_file = dataset_path / "_annotations.all.jsonl"
-    train_path = dataset_path / "_annotations.train.jsonl"
-    valid_path = dataset_path / "_annotations.valid.jsonl"
+    json_file = dataset_parent / "_annotations.all.jsonl"
+    train_path = dataset_parent / "_annotations.train.jsonl"
+    valid_path = dataset_parent / "_annotations.valid.jsonl"
 
     # Load the dataset
     with open(json_file, "r") as file:
@@ -267,5 +276,8 @@ if __name__ == "__main__":
     # dataset_path = Path("/tmp/clevr-act-6-fxd-cam")
     # split_dataset(dataset_path, action_encoding = "xyzrotvec-cam")
 
-    dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v1")
-    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam", train_ratio=0)
+    #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v1")
+    #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam", train_ratio=0)
+
+    dataset_path = Path("/tmp/clevr-act-6-var-cam")
+    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2")

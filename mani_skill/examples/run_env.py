@@ -3,13 +3,12 @@ Option 1: record inital frames:
 python run_env.py 
 
 Option 2: record trajectories (e.g. with rt shader)
-python run_env.py -d /tmp/clevr-act-8-objaverse-rt --shader=rt
+
 """
 import gymnasium as gym
 import numpy as np
 import random
 import sapien
-import torch
 import matplotlib.pyplot as plt
 import os
 import json
@@ -94,7 +93,7 @@ class Args:
     run_mode: Annotated[Optional[str], tyro.conf.arg(aliases=["-m"])] = "script"
     """Run a script|interactive|first. first renders first frame only"""
 
-    action_encoder: Annotated[Optional[str], tyro.conf.arg(aliases=["-ae"])] = "xyzrotvec-cam-proj"
+    action_encoder: Annotated[Optional[str], tyro.conf.arg(aliases=["-ae"])] = "xyzrotvec-cam-proj2"
     """Action encoding"""
 
 
@@ -134,8 +133,8 @@ def iterate_env(args: Args, vis=True, model=None):
         num_envs=args.num_envs,
         sim_backend=args.sim_backend,
         parallel_in_single_scene=parallel_in_single_scene,
-        robot_uids="fetch",  #fetch, panda_wristcam
-        scene_dataset="ProcTHOR", # Table, ProcTHOR
+        robot_uids="panda",  #fetch, panda_wristcam
+        scene_dataset="Table", # Table, ProcTHOR
         object_dataset="clevr", # clevr, ycb, objaverse
         # **args.env_kwargs
     )
@@ -245,6 +244,7 @@ def iterate_env(args: Args, vis=True, model=None):
 
             # execute motion sequence using IK solver
             RobotArmMotionPlanningSolver = getMotionPlanner(env)
+            vis=False
             planner = RobotArmMotionPlanningSolver(
                 env,
                 debug=False,
@@ -305,6 +305,7 @@ def run_interactive(env):
 
 
 def save_dataset(sample_generator, N: int, dataset_path):
+    dataset_orig = dataset_path
     dataset_path = dataset_path / "dataset"
     os.makedirs(dataset_path, exist_ok=True)
 
@@ -318,7 +319,7 @@ def save_dataset(sample_generator, N: int, dataset_path):
         executor.submit(save_image, image, path)
 
     def save_labels(annotations):
-        json_file = dataset_path / "_annotations.all.jsonl"
+        json_file = dataset_orig / "_annotations.all.jsonl"
         # "a" means append to the file
         with open(json_file, "a") as f:
             for obj in annotations:
@@ -326,7 +327,7 @@ def save_dataset(sample_generator, N: int, dataset_path):
                 f.write("\n")
 
     def get_num_lines():
-        json_file = dataset_path / "_annotations.all.jsonl"
+        json_file = dataset_orig / "_annotations.all.jsonl"
         if Path(json_file).exists():
             with open(json_file) as f:
                 return sum(1 for line in f)
@@ -367,9 +368,9 @@ if __name__ == "__main__":
         while True:
             _ = next(env_iter)
     else:
-        N_samples = int(140_000+10_000)
+        #N_samples = int(140_000+10_000)
         #N_samples = int(2/0.8)
-        #N_samples = 20
+        N_samples = 10
         parsed_args.run_mode = "first"
         if isinstance(parsed_args.seed, int):
             rng = np.random.default_rng(parsed_args.seed)

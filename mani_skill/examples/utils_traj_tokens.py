@@ -361,6 +361,96 @@ def decode_trajectory_xyzrotvec(caption, camera=None, robot_pose=None):
 
 #-----------------------------------------------------------------------------
 
+def encode_trajectory_xyzrotvec2(curve_3d, orns_3d, camera, robot_pose=None, return_didclip=False):
+    """
+    Trajectory encoded as y, x, z with x, y being pixel positions in range (0, 1023) and z being depth in cm
+    """
+    # In theory this code should handle (N, 7) poses, but for now we only support single envs
+    DEPTH_SCALE = 100
+    ROT_SCALE = (128-1) / (2*np.pi)
+
+    curve_25d = project_points(camera, curve_3d, return_depth=True)
+    curve_2d = curve_25d[..., :2]
+    depth = curve_25d[..., 2]
+    curve_2d_short, didclip = clip_and_interpolate(curve_2d, camera, return_didclip=True)
+
+    # transform orientation to matrix
+    assert curve_3d.shape[:2] == orns_3d.shape[:2]
+    assert curve_3d.ndim == 3 and orns_3d.ndim == 3
+    assert curve_3d.shape[2] == 3 and orns_3d.shape[2] == 4
+
+    poses = Pose.create_from_pq(p=curve_3d.view(-1, 3), q=orns_3d.view(-1, 4))
+    extrinsic_orn = R.from_matrix(camera.get_extrinsic_matrix()[:, :3, :3])
+    extrinsic_p = Pose.create_from_pq(p=camera.get_extrinsic_matrix()[:, :3, 3],
+                                      q=extrinsic_orn.as_quat(scalar_first=True))
+    poses_c = extrinsic_p * poses
+    orn_c_obj = R.from_quat(poses_c.get_q(), scalar_first=True)
+    rotvec = torch.tensor(orn_c_obj.as_rotvec())
+    rotvec_positive = rotvec + torch.tensor([np.pi,]*3)
+    is_ok = (rotvec_positive > 0).all() and (rotvec_positive < 2*np.pi).all()
+    if not is_ok:
+        print("Warning: Rotvec out of range.")
+
+    # This is the part that is not parrelized
+    env_idx = 0
+    depth_env = (depth[env_idx]*DEPTH_SCALE).round().int()  # distance from camera in [cm]
+    traj_1024 = normalize_imgcoord(curve_2d_short[env_idx], (camera.width, camera.height))
+    rotvec_int = (rotvec_positive * ROT_SCALE).round().int()
+    result = ""
+    for keypoint_xy, keypoint_d, rv in zip(traj_1024, depth_env, rotvec_int):
+        result += f"<loc{keypoint_xy[1]:04d}><loc{keypoint_xy[0]:04d}><loc{keypoint_d:04d}>"
+        result += f"<seg{rv[0]:03d}><seg{rv[1]:03d}><seg{rv[2]:03d}>"
+    result = result.strip()  # Remove any trailing newlines
+    if return_didclip:
+        return curve_2d_short, depth, result, didclip 
+    return curve_2d_short, depth, result
+
+
+def decode_caption_xyzrotvec2(caption, camera=None, robot_pose=None):
+    """
+    Takes a trajectory string and converts it into curve_25d, quat_c
+    """
+    num_tokens = 6
+    DEPTH_SCALE = 100
+    ROT_SCALE = (128-1) / (2*np.pi)
+
+    # Pattern to extract numbers inside <loc####> tags
+    #loc_strings = re.findall(r"(<loc(\d{4})>|<seg(\d{3})>)", caption)
+    loc_strings = re.findall(r"<(?:loc|seg)(\d+)>", caption)
+    num_position_tokens = len(loc_strings)
+    loc_strings_pairs = loc_strings[:(num_position_tokens//num_tokens)*num_tokens]
+    loc_numbers = [int(x) for x in loc_strings_pairs]
+    loc_h = [x/(1024-1)*camera.height for x in loc_numbers[::num_tokens]]
+    loc_w = [x/(1024-1)*camera.width for x in loc_numbers[1::num_tokens]]
+    loc_d = [x/DEPTH_SCALE for x in loc_numbers[2::num_tokens]]  # depth
+    loc_r0 = [x/ROT_SCALE for x in loc_numbers[3::num_tokens]]  # rotvec[0]
+    loc_r1 = [x/ROT_SCALE for x in loc_numbers[4::num_tokens]]  # rotvec[1]
+    loc_r2 = [x/ROT_SCALE for x in loc_numbers[5::num_tokens]]  # rotvec[2]
+    
+    curve_25d = torch.tensor((loc_w, loc_h, loc_d)).T
+    rotvec_positive = torch.tensor((loc_r0, loc_r1, loc_r2)).T
+    rotvec = rotvec_positive - torch.tensor([np.pi,]*3)
+    quat_c = torch.tensor(R.from_rotvec(rotvec).as_quat(scalar_first=True)).float()
+    return curve_25d, quat_c
+
+
+def decode_trajectory_xyzrotvec2(caption, camera=None, robot_pose=None):
+    """
+    Takes a caption string and converts it to world coordinates
+    """
+    curve_25d, quat_c = decode_caption_xyzrotvec2(caption, camera)
+    # from camera to world coordinates
+    extrinsic_orn = R.from_matrix(camera.get_extrinsic_matrix()[:, :3, :3])
+    extrinsic = Pose.create_from_pq(p=camera.get_extrinsic_matrix()[:, :3, 3],
+                                    q=extrinsic_orn.as_quat(scalar_first=True))
+    quat_w = extrinsic.inv() * Pose.create_from_pq(q=quat_c)
+    curve_w = unproject_points(camera, curve_25d) 
+
+    return curve_w, quat_w.get_q().unsqueeze(0)  # shape (P, 3 = u, v, d)
+
+
+#-----------------------------------------------------------------------------
+
 def encode_trajectory_xyzrotvec_rbt(curve_3d, orns_3d, camera, robot_pose=None, return_didclip=False):
     """
     Trajectory encoded as y, x, z with x, y being pixel positions in range (0, 1023) and z being depth in cm
@@ -447,6 +537,8 @@ def getActionEncDecFunction(name):
         return encode_trajectory_xyzrotvec, decode_trajectory_xyzrotvec
     elif name == "xyzrotvec-rbt":
         return encode_trajectory_xyzrotvec_rbt, decode_trajectory_xyzrotvec_rbt
+    elif name == "xyzrotvec-cam-proj2":
+        return encode_trajectory_xyzrotvec2, decode_trajectory_xyzrotvec2
     else:
         raise ValueError
 
@@ -461,7 +553,7 @@ def check_encode_decode():
     camera_extrinsic = [[[-0.759, 0.651, 0.0, 0.0], [0.301, 0.351, -0.887, 0.106], [-0.577, -0.673, -0.462, 0.575]]]
     camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
 
-    camera = DummyCamera(camera_intrinsic, camera_extrinsic)
+    camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=448, height=448)
     points_3d = torch.tensor([[[-0.1689,  0.0338,  0.0350],
                                [-0.1137,  0.1394,  0.0700]]])
     
@@ -496,10 +588,15 @@ def check_encode_decode():
     # check xyz-rotvec-rbt
     curve_25d, depth, token_str = encode_trajectory_xyzrotvec_rbt(points_3d, orns_3d, camera, robot_pose=robot_pose)
     points_3d_est, orns_3d_est = decode_trajectory_xyzrotvec_rbt(token_str, camera, robot_pose=robot_pose)
-    
     assert torch.allclose(points_3d, points_3d_est, atol=.005), "xyz-rotvec-rbt pose"
-    #assert torch.allclose(orns_3d, orns_3d_est, atol=.005), "xyz-rotvec-rbt orn"
     assert are_orns_close(orns_3d, orns_3d_est)
+
+    curve_25d, depth, token_str = encode_trajectory_xyzrotvec2(points_3d, orns_3d, camera, robot_pose=robot_pose)
+    points_3d_est, orns_3d_est = decode_trajectory_xyzrotvec2(token_str, camera, robot_pose=robot_pose)
+    assert torch.allclose(points_3d, points_3d_est, atol=.005), "xyz-rotvec-cam2"
+    #assert torch.allclose(orns_3d, orns_3d_est, atol=.005), "xyz-rotvec-rbt orn"
+    #assert are_orns_close(orns_3d, orns_3d_est)
+    print(are_orns_close(orns_3d, orns_3d_est, return_max_diff=True))
 
 
 if __name__ == "__main__":

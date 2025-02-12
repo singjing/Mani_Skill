@@ -172,6 +172,11 @@ class StackCubeEnv(BaseEnv):
         count_dict = dict(zip(unique_vals, counts))
         self.objects_unique = [count_dict[num] == 1 for num in model_ids]
 
+    def get_objaverse_asset(self, objaverse_uid):
+        """
+        Returns:
+
+        """
     def _load_scene_objaverse(self, num_objects):
         from pathlib import Path
         num_objects = 2
@@ -190,14 +195,14 @@ class StackCubeEnv(BaseEnv):
         obj_pose = sapien.Pose(q=obj_q)
         def get_objaverse_builder(scene: ManiSkillScene, file: str, add_collision=True, add_visual=True, scale=.01):
             builder = scene.create_actor_builder()
-            density =  1000
-            physical_material = None
+            #density =  1000
+            #physical_material = None
             if add_collision:
                 collision_file = str(file)
                 builder.add_nonconvex_collision_from_file(
                     filename=collision_file,
                     scale=[scale] * 3,
-                    material=physical_material,
+                    #material=physical_material,
                     #density=density,
                     pose=obj_pose
                 )
@@ -207,6 +212,7 @@ class StackCubeEnv(BaseEnv):
             return builder
 
         if self.objaverse_model_ids is None:
+            # collect all objaverse assets
             glb_files = list((objaverse_folder / "glbs").rglob("*.glb"))
             print(f"Objaverse models found {len(glb_files)}, {objaverse_folder}")
             self.objaverse_model_ids = glb_files
@@ -215,9 +221,11 @@ class StackCubeEnv(BaseEnv):
         uids_list = sorted(list(self.objaverse_files.keys()))
         OBJAVERSE_SCALES = {
             'b5c9d06f19be4c92a1708515f6655573':.02,
-            '412ed49af0644f30bae822d29afbb066':.001,
+            '412ed49af0644f30bae822d29afbb066':0.03,#.001,
             '088c1883e07e4946956488171e3a06bf':.1,
-            '93128128f8f848d8bd261f6c1f763a53':.005
+            '93128128f8f848d8bd261f6c1f763a53':.005,
+            '005a246f8c304e77b27cf11cd53ff4ed':0.00010,
+            '584ce7acb3384c36bf252fde72063a56':0.00038,
             
         }
         uids_list = sorted(list(OBJAVERSE_SCALES.keys()))
@@ -225,11 +233,11 @@ class StackCubeEnv(BaseEnv):
 
         model_ids = randomization.uniform(0.0, float(len(uids_list)), size=(num_objects,)).cpu().numpy().astype(int)
         model_uids = [uids_list[x] for x in model_ids]
-        #model_uids = ['b5c9d06f19be4c92a1708515f6655573','412ed49af0644f30bae822d29afbb066']
-        model_uids = ['00bfa4e5862d4d4b89f9bcf06d2a19e4', 'b5c9d06f19be4c92a1708515f6655573',]
+        model_uids = ['b5c9d06f19be4c92a1708515f6655573','412ed49af0644f30bae822d29afbb066']
+        #model_uids = ['00bfa4e5862d4d4b89f9bcf06d2a19e4', 'b5c9d06f19be4c92a1708515f6655573',]
+        model_uids = ['584ce7acb3384c36bf252fde72063a56', '088c1883e07e4946956488171e3a06bf']
         for i, uid in enumerate(model_uids):
             #model_id = self.objaverse_model_ids[model_idx]
-            model_name = "xxx"
             filename = self.objaverse_files[uid]
             try:
                 scale = OBJAVERSE_SCALES[uid]
@@ -237,6 +245,7 @@ class StackCubeEnv(BaseEnv):
                 scale = .02
             builder = get_objaverse_builder(self.scene, filename, scale=scale)
             builder.initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
+            model_name="xxx"
             self.objects.append(builder.build(name=f"{model_name}-{i}"))
             self.objects_descr.append(dict(size="", color="", shape=model_name))
 
@@ -267,20 +276,16 @@ class StackCubeEnv(BaseEnv):
             self.object_region = np.array(region).T.tolist()
             ref_item.remove_from_scene()
 
+            # add lighting
             ray_traced_lighting = self._custom_human_render_camera_configs.get("shader_pack",None) in ["rt","rt-fast"]
             self.scene.set_ambient_light([3 if ray_traced_lighting else 0.3] * 3)
-
             color = np.array([1.0, 0.8, 0.5]) * (10 if ray_traced_lighting else 2)
-            # entrance
             self.scene.add_point_light([region_pos[0], region_pos[1], 2.3], color=color)
-
-            
         else:
             raise ValueError
 
         min_objects = 2
         max_objects = 5
-
         num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
         
         self.objects = []
@@ -332,6 +337,14 @@ class StackCubeEnv(BaseEnv):
                     lock_z=False,
                 )
                 shape.set_pose(Pose.create_from_pq(p=xyz.clone(), q=qs))
+            
+            # do intervention
+            from mani_skill.examples.utils_env_interventions import move_object_onto
+
+            obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
+            self.obj_start = obj_start
+            self.obj_end = obj_end
+            self.action_text = action_text
 
 
     def set_goal_pose(self, objA_goal_pose):
@@ -347,16 +360,25 @@ class StackCubeEnv(BaseEnv):
         
 
     def _get_obs_extra(self, info: Dict):
-        obs = dict(tcp_pose=self.agent.tcp.pose.raw_pose)
-        if "state" in self.obs_mode:
-            obs.update(
-                cubeA_pose=self.cubeA.pose.raw_pose,
-                cubeB_pose=self.cubeB.pose.raw_pose,
-                tcp_to_cubeA_pos=self.cubeA.pose.p - self.agent.tcp.pose.p,
-                tcp_to_cubeB_pos=self.cubeB.pose.p - self.agent.tcp.pose.p,
-                cubeA_to_cubeB_pos=self.cubeB.pose.p - self.cubeA.pose.p,
-            )
+        from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb    
+        grasp_pose, _ = get_grasp_pose_and_obb(self)
+        grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
+        tcp_pose = self.agent.tcp.pose
+        robot_pose = self.agent.robot.get_root_pose()
+        obs = dict(obj_start=self.obj_start.raw_pose, obj_end=self.obj_end.raw_pose,
+                   grasp_pose=grasp_pose.raw_pose, tcp_pose=tcp_pose.raw_pose, robot_pose=robot_pose.raw_pose)
+        obs[self.action_text] = 123
         return obs
+        # obs = dict(tcp_pose=self.agent.tcp.pose.raw_pose)
+        # if "state" in self.obs_mode:
+        #     obs.update(
+        #         cubeA_pose=self.cubeA.pose.raw_pose,
+        #         cubeB_pose=self.cubeB.pose.raw_pose,
+        #         tcp_to_cubeA_pos=self.cubeA.pose.p - self.agent.tcp.pose.p,
+        #         tcp_to_cubeB_pos=self.cubeB.pose.p - self.agent.tcp.pose.p,
+        #         cubeA_to_cubeB_pos=self.cubeB.pose.p - self.cubeA.pose.p,
+        #     )
+        # return obs
 
     def compute_normalized_dense_reward(
         self, obs: Any, action: torch.Tensor, info: Dict
