@@ -43,10 +43,16 @@ def project_point(camera, point_3d):
     point_image_n = point_image_h[:, :2] / point_image_h[:, 2]
     return point_image_n
 
+def convert_to_tensor(matrix):
+    if isinstance(matrix, torch.Tensor):
+        return matrix.clone().detach()
+    else:
+        return torch.tensor(matrix, dtype=torch.float32)
+        
 class DummyCamera:
     def __init__(self, intrinsic_matrix, extrinsic_matrix, width, height):
-        self.intrinsic_matrix = torch.tensor(intrinsic_matrix)
-        self.extrinsic_matrix = torch.tensor(extrinsic_matrix)
+        self.intrinsic_matrix = convert_to_tensor(intrinsic_matrix)
+        self.extrinsic_matrix = convert_to_tensor(extrinsic_matrix)
         self.width = width
         self.height = height
     def get_extrinsic_matrix(self):

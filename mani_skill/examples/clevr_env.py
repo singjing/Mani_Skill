@@ -19,6 +19,9 @@ from mani_skill.utils.scene_builder.table import TableSceneBuilder
 from mani_skill.utils.scene_builder.ai2thor import ProcTHORSceneBuilder
 from mani_skill.utils.structs.pose import Pose
 from mani_skill.utils.io_utils import load_json
+from mani_skill.examples.utils_env_interventions import move_object_onto
+from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
+from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
 
 from pdb import set_trace
 
@@ -27,8 +30,6 @@ class StackCubeEnv(BaseEnv):
     SUPPORTED_ROBOTS = ["panda_wristcam", "panda", "fetch"]
     SUPPORTED_OBJECT_DATASETS = ["clevr", "ycb", "objaverse"]
     SUPPORTED_SCENE_DATASETS = ['Table', 'ProcTHOR']
-    RANDOMIZE_VIEW = True
-
     agent: Union[Panda, Fetch]
 
 
@@ -43,9 +44,14 @@ class StackCubeEnv(BaseEnv):
         #self.cam_size = 224
         self.cam_size = 448
 
+        self.RANDOMIZE_VIEW = True
+        self.RESAMPLE_CAMERA_IF_OBJS_UNSEEN = 100
+
         # cached stuff for loaders
         self.objaverse_model_ids = None
         self.ycb_model_ids = None
+
+        self.initalize_render_camera_fixed()  # sets render_camera_config
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
     def base_camera_pose(self):
@@ -57,33 +63,20 @@ class StackCubeEnv(BaseEnv):
         pose = sapien_utils.look_at(new_p, end_p)
         return pose
         
-    @property
-    def _default_sensor_configs(self):
-        #pose = self.base_camera_pose()
-        #return [CameraConfig("base_camera", pose, 128, 128, np.pi / 2, 0.01, 100)]
-        if self.RANDOMIZE_VIEW:
-            return self._default_human_render_camera_configs_random
-        else:
-            return self._default_human_render_camera_configs_fixed
-
-
-    @property
-    def _default_human_render_camera_configs_fixed(self):
+    def initalize_render_camera_fixed(self):
         start_p = [0.6, 0.7, 0.6]
         end_p = [0.0, 0.0, 0.12]
         t = 0.5
         new_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
         pose = sapien_utils.look_at(new_p, end_p)
-        return CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+        self.render_camera_config = CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
 
-    @property
-    def _default_human_render_camera_configs_random(self):
+    def initalize_render_camera_random(self):
         cylinder_c = np.array([.45, 0, .36])
         cylinder_ext = np.array([.10, np.pi*4/5, .10])
         cylinder_l = cylinder_c - cylinder_ext
         cylinder_h = cylinder_c + cylinder_ext
         r, phi, z = randomization.uniform(cylinder_l, cylinder_h, size=(3,)).cpu().numpy().astype(float)
-        # print(r, phi, z)
         start_p = [r * np.cos(phi), r * np.sin(phi), z]
         end_p = randomization.uniform(*zip(*self.object_region),size=(3,)).cpu().numpy().astype(float)
         
@@ -92,15 +85,17 @@ class StackCubeEnv(BaseEnv):
             start_p = (np.array(start_p) + np.array(end_p)).tolist()
 
         pose = sapien_utils.look_at(start_p, end_p)
-        return CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+        self.render_camera_config = CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+
+    @property
+    def _default_sensor_configs(self):
+        return self.render_camera_config
 
     @property
     def _default_human_render_camera_configs(self):
-        if self.RANDOMIZE_VIEW:
-            return self._default_human_render_camera_configs_random
-        else:
-            return self._default_human_render_camera_configs_fixed
+        return self.render_camera_config
 
+        
     def _load_agent(self, options: dict):
         super()._load_agent(options, sapien.Pose(p=[-0.0, 0, 0]))
 
@@ -120,6 +115,7 @@ class StackCubeEnv(BaseEnv):
             unique, counts = np.unique(shape_array, axis=0, return_counts=True)
             if np.sum(counts==1) >= min_unique:
                 break
+
         if np.sum(counts==1) < min_unique:
             print(f"Failed to sample {min_unique} unique objects after {max_attempts} attempts.") 
         # NumPy arrays don't handle element-wise comparisons with the Python in operator directly when comparing arrays.
@@ -220,17 +216,15 @@ class StackCubeEnv(BaseEnv):
         
         uids_list = sorted(list(self.objaverse_files.keys()))
         OBJAVERSE_SCALES = {
-            'b5c9d06f19be4c92a1708515f6655573':.02,
-            '412ed49af0644f30bae822d29afbb066':0.03,#.001,
-            '088c1883e07e4946956488171e3a06bf':.1,
-            '93128128f8f848d8bd261f6c1f763a53':.005,
-            '005a246f8c304e77b27cf11cd53ff4ed':0.00010,
-            '584ce7acb3384c36bf252fde72063a56':0.00038,
+            'b5c9d06f19be4c92a1708515f6655573': 0.02,
+            '412ed49af0644f30bae822d29afbb066': 0.03,#.001,
+            '088c1883e07e4946956488171e3a06bf': 0.1,
+            '93128128f8f848d8bd261f6c1f763a53': 0.005,
+            '005a246f8c304e77b27cf11cd53ff4ed': 0.00010,
+            '584ce7acb3384c36bf252fde72063a56': 0.00038,
             
         }
         uids_list = sorted(list(OBJAVERSE_SCALES.keys()))
-
-
         model_ids = randomization.uniform(0.0, float(len(uids_list)), size=(num_objects,)).cpu().numpy().astype(int)
         model_uids = [uids_list[x] for x in model_ids]
         model_uids = ['b5c9d06f19be4c92a1708515f6655573','412ed49af0644f30bae822d29afbb066']
@@ -304,6 +298,24 @@ class StackCubeEnv(BaseEnv):
         self.cubeA = self.objects[0]  
         self.cubeB = self.objects[1]
         
+    def check_objects_visible(self, obj_a, obj_b, camera):
+        """
+        Returns True if objects are visible from camera, else return False.
+        """
+        # just make use of the encoding function for now, at some point write a function
+        grasp_pose = obj_a
+        tcp_pose = obj_a
+        action_text = "check visibility"
+        enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
+        prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_a, obj_b,
+                                                                camera, grasp_pose, tcp_pose,
+                                                                action_text, enc_func, robot_pose=None)
+        if info["didclip_traj"]:
+            return False
+        return True
+
+
+    
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         with torch.device(self.device):
             b = len(env_idx)
@@ -324,12 +336,10 @@ class StackCubeEnv(BaseEnv):
                     region_maxs = [x[1] for x in self.object_region]
                     xyz[:,] = randomization.uniform(region_mins, region_maxs, size=(1,))
                     xyz[:,2] += 0.02
-                    #set_trace()
                 else:
                     shape_xy = xy + sampler.sample(radius, max_trials=100)
                     xyz[:, :2] = shape_xy
-                #xyz[:, 2] = self.sizes[descr["size"]]
-                #xyz[:, 2] = 0
+
                 qs = randomization.random_quaternions(
                     b,
                     lock_x=True,
@@ -339,12 +349,32 @@ class StackCubeEnv(BaseEnv):
                 shape.set_pose(Pose.create_from_pq(p=xyz.clone(), q=qs))
             
             # do intervention
-            from mani_skill.examples.utils_env_interventions import move_object_onto
-
             obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
+            self.set_goal_pose(obj_end)
             self.obj_start = obj_start
             self.obj_end = obj_end
             self.action_text = action_text
+            from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb    
+            grasp_pose, _ = get_grasp_pose_and_obb(self)
+            self.grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
+
+
+            are_visible = False
+            if self.RANDOMIZE_VIEW:
+                self.initalize_render_camera_random()
+                for i in range(self.RESAMPLE_CAMERA_IF_OBJS_UNSEEN):
+                    camera = self.scene.human_render_cameras['render_camera'].camera 
+                    #print("XXX", camera.get_extrinsic_matrix())
+                    are_visible = self.check_objects_visible(obj_start, obj_end, camera)
+                    if are_visible:
+                        break
+                    self.initalize_render_camera_random()
+                    self._setup_sensors(options)
+                if not are_visible:
+                    print("Warning: could not sample visible camera position.")
+                
+            else:
+                self.initalize_render_camera_fixed()
 
 
     def set_goal_pose(self, objA_goal_pose):
@@ -360,14 +390,11 @@ class StackCubeEnv(BaseEnv):
         
 
     def _get_obs_extra(self, info: Dict):
-        from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb    
-        grasp_pose, _ = get_grasp_pose_and_obb(self)
-        grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
         tcp_pose = self.agent.tcp.pose
         robot_pose = self.agent.robot.get_root_pose()
         obs = dict(obj_start=self.obj_start.raw_pose, obj_end=self.obj_end.raw_pose,
-                   grasp_pose=grasp_pose.raw_pose, tcp_pose=tcp_pose.raw_pose, robot_pose=robot_pose.raw_pose)
-        obs[self.action_text] = 123
+                   grasp_pose=self.grasp_pose.raw_pose, tcp_pose=tcp_pose.raw_pose, robot_pose=robot_pose.raw_pose)
+        obs["action_text_"+self.action_text] = 123
         return obs
         # obs = dict(tcp_pose=self.agent.tcp.pose.raw_pose)
         # if "state" in self.obs_mode:

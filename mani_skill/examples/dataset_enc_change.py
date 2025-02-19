@@ -276,8 +276,8 @@ if __name__ == "__main__":
     # dataset_path = Path("/tmp/clevr-act-6-fxd-cam")
     # split_dataset(dataset_path, action_encoding = "xyzrotvec-cam")
 
-    #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v1")
-    #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam", train_ratio=0)
+    dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v1")
+    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2", train_ratio=0)
 
-    dataset_path = Path("/tmp/clevr-act-6-var-cam")
-    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2")
+    #dataset_path = Path("/tmp/clevr-act-6-var-cam")
+    #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2")

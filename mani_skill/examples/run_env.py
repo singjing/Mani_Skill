@@ -3,6 +3,7 @@ Option 1: record inital frames:
 python run_env.py 
 
 Option 2: record trajectories (e.g. with rt shader)
+python run_env.py --record_dir /tmp/clevr-obs-extra
 
 """
 import gymnasium as gym
@@ -33,10 +34,13 @@ from mani_skill.examples.utils_env_interventions import move_object_onto
 from mani_skill.examples.utils_trajectory import generate_curve_torch
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
 from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
+from utils_trajectory import DummyCamera
 
 from pdb import set_trace
 
 RAND_MAX = 2**32 - 1
+SAVE_FREQ = 10
+SAVE_VIDEO = False
 
 
 def getMotionPlanner(env):
@@ -97,7 +101,6 @@ class Args:
     """Action encoding"""
 
 
-
 def reset_random(args, orig_seeds):
     if orig_seeds is None:
         seed = random.randrange(RAND_MAX)
@@ -111,7 +114,7 @@ def reset_random(args, orig_seeds):
     np.random.seed(seed)
 
     
-def iterate_env(args: Args, vis=True, model=None):
+def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
     np.set_printoptions(suppress=True, precision=3)
     verbose = not args.quiet
     parallel_in_single_scene = args.render_mode == "human"
@@ -142,7 +145,7 @@ def iterate_env(args: Args, vis=True, model=None):
     if args.record_dir:
         env = RecordEpisode(env, args.record_dir, info_on_video=False, 
                             save_trajectory=True, max_steps_per_video=env._max_episode_steps,
-                            save_on_reset=True,
+                            save_on_reset=SAVE_FREQ == 1,
                             record_env_state=True)
     
     if verbose:
@@ -159,7 +162,7 @@ def iterate_env(args: Args, vis=True, model=None):
     print("action encoder", args.action_encoder)
 
     orig_seeds = args.seed
-    for _ in range(10**6):    
+    for i in range(max_iter):    
         reset_random(args, orig_seeds)
         obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         if args.seed is not None:
@@ -177,23 +180,45 @@ def iterate_env(args: Args, vis=True, model=None):
         env_idx = 0
         # get image before intervention (randomization of human_render_camera is done by clevr_env.py)
         
-        #-----
-        # Warning, taking an image form obs/rendering it results in different calibrations!
-        #----
-        images = env.base_env.scene.get_human_render_camera_images('render_camera')
-        image_before = images['render_camera'][env_idx].numpy()
-        #image_before = obs['sensor_data']['render_camera']['rgb'][0].detach().numpy()
-        assert image_before.shape == (448, 448, 3)
+        # #-----
+        # # Warning, taking an image form obs/rendering it results in different calibrations!
+        # #----
+        # images = env.base_env.scene.get_human_render_camera_images('render_camera')
+        # image_before = images['render_camera'][env_idx].numpy()
+        # #image_before = obs['sensor_data']['render_camera']['rgb'][0].detach().numpy()
+        # assert image_before.shape == (448, 448, 3)
 
-        # do intervention (this will set env.base_env.cubeA onto cubeB)
-        obj_start, obj_end, action_text = move_object_onto(env, pretend=True)
-        env.unwrapped.set_goal_pose(obj_end)
+        # # do intervention (this will set env.base_env.cubeA onto cubeB)
+        # obj_start, obj_end, action_text = move_object_onto(env, pretend=True)
+        # env.unwrapped.set_goal_pose(obj_end)
         
-        camera = env.base_env.scene.human_render_cameras['render_camera'].camera
-        grasp_pose, _ = get_grasp_pose_and_obb(env)
-        grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
-        tcp_pose = env.unwrapped.agent.tcp.pose
-        robot_pose = env.base_env.agent.robot.get_root_pose()
+        #camera = env.base_env.scene.human_render_cameras['render_camera'].camera
+        # grasp_pose, _ = get_grasp_pose_and_obb(env.base_env)
+        # grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
+        # tcp_pose = env.unwrapped.agent.tcp.pose
+        # robot_pose = env.base_env.agent.robot.get_root_pose()
+
+        obj_start = Pose(obs["extra"]["obj_start"].clone().detach())
+        obj_end = Pose(obs["extra"]["obj_end"].clone().detach())
+        grasp_pose = Pose(obs["extra"]["grasp_pose"].clone().detach())
+        tcp_pose = Pose(obs["extra"]["tcp_pose"].clone().detach())
+        robot_pose = Pose(obs["extra"]["robot_pose"].clone().detach())
+
+        try:
+            camera_intrinsic = obs["sensor_param"]["render_camera"]["intrinsic_cv"].clone().detach()
+            camera_extrinsic = obs["sensor_param"]["render_camera"]["extrinsic_cv"].clone().detach()
+            image_before = obs["sensor_data"]["render_camera"]["rgb"][0].clone().detach()
+            width, height, _ = image_before.shape
+            camera = DummyCamera(camera_intrinsic, camera_extrinsic, width, height)
+        except KeyError:
+            image_before = None
+            camera = env.base_env.scene.human_render_cameras['render_camera'].camera
+
+        action_text = None
+        for x in obs["extra"].keys():
+            if x.startswith("action_text_"):
+                action_text = str(x).replace("action_text_", "")
+        assert action_text is not None
 
         #enc_func, dec_func = getEncDecFunc("xyzrotvec-rbt")
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
@@ -220,7 +245,8 @@ def iterate_env(args: Args, vis=True, model=None):
             curve_3d_est, orns_3d_est = dec_func(token_str, camera, robot_pose=robot_pose)
             curve_3d = curve_3d_est  # set the unparsed trajectory one used for policy
             orns_3d = orns_3d_est
-        
+            enc_func, dec_func = getActionEncDecFunction(args.action_encoder)
+
         # Evaluate the trajectory
         if args.run_mode == "script" or model:
             assert args.control_mode == "pd_joint_pos"
@@ -244,7 +270,6 @@ def iterate_env(args: Args, vis=True, model=None):
 
             # execute motion sequence using IK solver
             RobotArmMotionPlanningSolver = getMotionPlanner(env)
-            vis=False
             planner = RobotArmMotionPlanningSolver(
                 env,
                 debug=False,
@@ -283,14 +308,14 @@ def iterate_env(args: Args, vis=True, model=None):
             except KeyError:
                 pass
 
-            #set_trace()
+            #if i % SAVE_FREQ == 0:
             # keep the transition from reset (which does not have an action)
             env.flush_trajectory(save=True, ignore_empty_transition=False)
-            video_name =  f"CLEVR_{str(args.seed[0]).zfill(10)}"
-            env.flush_video(name=video_name, save=True)
+            if SAVE_VIDEO:
+                video_name =  f"CLEVR_{str(args.seed[0]).zfill(10)}"
+                env.flush_video(name=video_name, save=True)
 
         yield image_before, json_dict, args.seed[0]
-
 
     env.close()
 
@@ -304,54 +329,120 @@ def run_interactive(env):
         env.base_env.render_human()
 
 
-def save_dataset(sample_generator, N: int, dataset_path):
-    dataset_orig = dataset_path
-    dataset_path = dataset_path / "dataset"
-    os.makedirs(dataset_path, exist_ok=True)
+# def save_dataset(sample_generator, N: int, dataset_path):
+#     dataset_orig = dataset_path
+#     dataset_path = dataset_path / "dataset"
+#     os.makedirs(dataset_path, exist_ok=True)
 
-    # Initialize a ThreadPoolExecutor with one or more workers
-    executor = ThreadPoolExecutor(max_workers=3)
-    def save_image(image, path) -> None:
-        Image.fromarray(image).save(path, format='JPEG')
+#     # Initialize a ThreadPoolExecutor with one or more workers
+#     executor = ThreadPoolExecutor(max_workers=3)
+#     def save_image(image, path) -> None:
+#         Image.fromarray(image).save(path, format='JPEG')
         
-    def save_image_async(image, path) -> None:
-        # Submit the save_image task to be run in a separate thread
-        executor.submit(save_image, image, path)
+#     def save_image_async(image, path) -> None:
+#         # Submit the save_image task to be run in a separate thread
+#         executor.submit(save_image, image, path)
 
-    def save_labels(annotations):
-        json_file = dataset_orig / "_annotations.all.jsonl"
-        # "a" means append to the file
-        with open(json_file, "a") as f:
-            for obj in annotations:
-                json.dump(obj, f)
-                f.write("\n")
+#     def save_labels(annotations):
+#         json_file = dataset_orig / "_annotations.all.jsonl"
+#         # "a" means append to the file
+#         with open(json_file, "a") as f:
+#             for obj in annotations:
+#                 json.dump(obj, f)
+#                 f.write("\n")
 
-    def get_num_lines():
-        json_file = dataset_orig / "_annotations.all.jsonl"
-        if Path(json_file).exists():
-            with open(json_file) as f:
-                return sum(1 for line in f)
+#     def get_num_lines():
+#         json_file = dataset_orig / "_annotations.all.jsonl"
+#         if Path(json_file).exists():
+#             with open(json_file) as f:
+#                 return sum(1 for line in f)
+#         else:
+#             return 0
+        
+#     #N_cur = get_num_lines()
+#     N_cur = 0
+#     N_remaining = N - N_cur
+#     annotations = []
+#     for i in tqdm(range(N_remaining),total=N_remaining):
+#         image_before, json_dict, rnd_seed = next(sample_generator)
+#         sample_name = str(rnd_seed).zfill(10)
+#         if image_before is not None:
+#             image_filename = f"CLEVR_{sample_name}.jpg"
+#             json_dict["image"] = image_filename
+#             save_image_async(image_before, dataset_path / image_filename)
+#         annotations.append(json_dict)
+#         if i % 100 == 0:
+#             save_labels(annotations)
+#             annotations = []
+#     save_labels(annotations)
+#     print("done.")
+
+import asyncio
+import time
+from copy import deepcopy
+import multiprocessing
+
+async def async_run_iteration(parsed_args, N_samples, process_num=None):
+    """Runs the environment iteration asynchronously."""
+    desc = "Processing Iterations"
+    if process_num is not None:
+        desc += f"-{process_num}"
+    env_iter = iterate_env(parsed_args, vis=False, max_iter=N_samples)
+    loop = asyncio.get_running_loop()
+    for _ in tqdm(range(N_samples), desc=desc):
+        await loop.run_in_executor(None, lambda: next(env_iter))
+
+def run_iteration(parsed_args, N_samples, process_num=None, progress_bar=None):
+    """Runs the environment iteration in a separate process."""
+    env_iter = iterate_env(parsed_args, vis=False, max_iter=N_samples)
+    for _ in range(N_samples):
+        _ = next(env_iter)
+        if progress_bar is not None:
+            progress_bar.value += 1
+
+def save_multiproces(parsed_args, N_samples, N_processes=10):
+        parsed_args.run_mode = "first"
+        dataset_path = parsed_args.record_dir
+
+        if isinstance(parsed_args.seed, int):
+            assert N_processes == 10
+            rng = np.random.default_rng(parsed_args.seed)
+            parsed_args.seed = rng.integers(0, RAND_MAX, N_samples).tolist()
+        
+        if N_processes == 1:
+            dataset_path = Path(dataset_path)
+            os.makedirs(dataset_path, exist_ok=True)
+            env_iter = iterate_env(parsed_args, vis=False, max_iter=N_samples)
+            for _ in tqdm(range(N_samples)):
+                _ = next(env_iter)
         else:
-            return 0
-        
-    #N_cur = get_num_lines()
-    N_cur = 0
-    N_remaining = N - N_cur
-    annotations = []
-    for i in tqdm(range(N_remaining),total=N_remaining):
-        image_before, json_dict, rnd_seed = next(sample_generator)
-        sample_name = str(rnd_seed).zfill(10)
-        if image_before is not None:
-            image_filename = f"CLEVR_{sample_name}.jpg"
-            json_dict["image"] = image_filename
-            save_image_async(image_before, dataset_path / image_filename)
-        annotations.append(json_dict)
-        if i % 100 == 0:
-            save_labels(annotations)
-            annotations = []
-    save_labels(annotations)
-    print("done.")
-        
+            samples_per_process = N_samples // N_processes
+            tasks = []
+            
+            progress_bar = multiprocessing.Value("i", 0)  
+            for p_num in range(N_processes):
+                dataset_path_p = Path(dataset_path) / f"p{p_num}"
+                os.makedirs(dataset_path_p, exist_ok=True)
+                args_copy = deepcopy(parsed_args)
+                args_copy.record_dir = dataset_path_p
+                #tasks.append(async_run_iteration(args_copy, N_samples=samples_per_process, process_num=p_num))
+                p = multiprocessing.Process(target=run_iteration, args=(args_copy, samples_per_process, p_num, progress_bar), name=f"Worker-{p_num+1}")
+                tasks.append(p)
+                p.start()
+                time.sleep(1.1)
+
+            # Display tqdm progress in the main process
+            with tqdm(total=N_samples, desc="Total Progress", position=0, leave=True) as pbar:
+                last_count = 0
+                while any(p.is_alive() for p in tasks):  # Update while processes are running
+                    current_count = progress_bar.value
+                    pbar.update(current_count - last_count)  # Update tqdm only for new progress
+                    last_count = current_count
+                    time.sleep(1)  # Prevents excessive updates
+            
+            #await asyncio.gather(*tasks)
+            for p in tasks:
+                p.join()  # Wait for all processes to finish
 
 if __name__ == "__main__":
     parsed_args = tyro.cli(Args)
@@ -364,18 +455,25 @@ if __name__ == "__main__":
             parsed_args.seed = seeds
 
     if dataset_path is None:
+        parsed_args.obs_mode = "state_dict"
         env_iter = iterate_env(parsed_args, vis=True)
         while True:
             _ = next(env_iter)
     else:
-        #N_samples = int(140_000+10_000)
-        #N_samples = int(2/0.8)
-        N_samples = 10
-        parsed_args.run_mode = "first"
-        if isinstance(parsed_args.seed, int):
-            rng = np.random.default_rng(parsed_args.seed)
-            parsed_args.seed = rng.integers(0, RAND_MAX, N_samples).tolist()
-        dataset_path = Path(dataset_path)
-        os.makedirs(dataset_path, exist_ok=True)
-        save_dataset(iterate_env(parsed_args, vis=False), N=int(N_samples), dataset_path=dataset_path)
+        N_samples = int(140_000+10_000)
+        #asyncio.run(save_multiproces(parsed_args, N_samples))
+        save_multiproces(parsed_args, N_samples)
+
+        # N_samples = int(2/0.8)
+        #N_samples = 50
+        # parsed_args.run_mode = "first"
+        # if isinstance(parsed_args.seed, int):
+        #     rng = np.random.default_rng(parsed_args.seed)
+        #     parsed_args.seed = rng.integers(0, RAND_MAX, N_samples).tolist()
+        # dataset_path = Path(dataset_path)
+        # os.makedirs(dataset_path, exist_ok=True)
+        # env_iter = iterate_env(parsed_args, vis=False, max_iter=N_samples)
+        # for _ in tqdm(range(N_samples)):
+        #     _ = next(env_iter)
+        # # save_dataset(iterate_env(parsed_args, vis=False, max_iter=N_samples), N=int(N_samples), dataset_path=dataset_path)
         
