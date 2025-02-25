@@ -18,3 +18,16 @@ def uniform(
         high = common.to_tensor(high, device=device)
     dist = high - low
     return torch.rand(size=size, device=device) * dist + low
+
+
+def choice(
+    a: Sequence[object],
+    size: int,
+    with_replacement: bool = False,
+    device: Device = None,
+):
+    if with_replacement:
+        indices = uniform(0, len(a), (size,), device=device).long()
+    else:
+        indices = torch.randperm(len(a), device=device)[:size]
+    return [a[idx] for idx in indices.tolist()]

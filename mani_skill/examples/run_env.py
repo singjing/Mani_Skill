@@ -100,6 +100,9 @@ class Args:
     action_encoder: Annotated[Optional[str], tyro.conf.arg(aliases=["-ae"])] = "xyzrotvec-cam-proj2"
     """Action encoding"""
 
+    object_dataset: Annotated[Optional[str], tyro.conf.arg(aliases=["-od"])] = "clevr"
+    """Dataset from which we sample objects"""
+
 
 def reset_random(args, orig_seeds):
     if orig_seeds is None:
@@ -124,7 +127,7 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
     if args.render_mode == "human" and args.num_envs == 1:
         parallel_in_single_scene = False
 
-    env: BaseEnv = gym.make(
+    env = gym.make(
         args.env_id,
         obs_mode=args.obs_mode,
         reward_mode=args.reward_mode,
@@ -138,7 +141,7 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
         parallel_in_single_scene=parallel_in_single_scene,
         robot_uids="panda",  #fetch, panda_wristcam
         scene_dataset="Table", # Table, ProcTHOR
-        object_dataset="clevr", # clevr, ycb, objaverse
+        object_dataset=args.object_dataset, # clevr, ycb, objaverse
         # **args.env_kwargs
     )
 
@@ -264,9 +267,10 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             assert curve_3d.shape[1] == 2 and orns_3d.shape[1] == 2  # start and stop poses
             _, curve_3d_i = generate_curve_torch(curve_3d[:, 0], curve_3d[:, -1], num_points=3)
             grasp_pose = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
-            reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
+            reach_pose = grasp_pose * sapien.Pose([0, 0, -0.10]) # Go above the object before grasping
             lift_pose = Pose.create_from_pq(p=curve_3d_i[:, 1], q=orns_3d[:, 1])
             align_pose = Pose.create_from_pq(p=curve_3d_i[:, 2], q=orns_3d[:, 1])
+            pre_align_pose = align_pose * sapien.Pose([0, 0, -0.10]) # Go above before dropping
 
             # execute motion sequence using IK solver
             RobotArmMotionPlanningSolver = getMotionPlanner(env)
@@ -283,6 +287,7 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             planner.move_to_pose_with_screw(grasp_pose)
             planner.close_gripper()
             planner.move_to_pose_with_screw(lift_pose)
+            planner.move_to_pose_with_screw(pre_align_pose)
             planner.move_to_pose_with_screw(align_pose)
             planner.open_gripper()
             final_reward = env.unwrapped.eval_reward()[0]

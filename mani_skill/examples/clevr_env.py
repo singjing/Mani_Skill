@@ -173,7 +173,30 @@ class StackCubeEnv(BaseEnv):
         Returns:
 
         """
-    def _load_scene_objaverse(self, num_objects):
+
+    def _load_scene_objaverse(self, num_objects: int=2):
+        # TODO Refactor to make this explit as Spok?
+        from mani_skill.examples.objaverse_handler import SpokDataset, get_spok_builder
+        
+        uuids = SpokDataset.sample_uuids(num_objects, with_replacement=False)
+
+        for uuid in uuids:
+            obj_builder = get_spok_builder(self.scene, uuid, add_collision=True, add_visual=True)
+            # TODO Update name?
+            model_name=f"{uuid}"
+            self.objects.append(obj_builder.build(name=f"{model_name}"))
+            self.objects_descr.append(dict(size="", color="", shape=model_name))
+
+            # from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
+            # print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
+        
+        unique_vals, counts = np.unique(uuids, return_counts=True)
+        count_dict = dict(zip(unique_vals, counts))
+        self.objects_unique = [count_dict[num] == 1 for num in uuids]
+
+    
+    def _load_scene_objaverse_old(self, num_objects):
+        raise NotImplementedError("This is old code, use _load_scene_objaverse_new")
         from pathlib import Path
         num_objects = 2
         #objaverse_folder = (ASSET_DIR / "../../.objaverse/hf-objaverse-v1/").resolve()
@@ -222,7 +245,7 @@ class StackCubeEnv(BaseEnv):
             '93128128f8f848d8bd261f6c1f763a53': 0.005,
             '005a246f8c304e77b27cf11cd53ff4ed': 0.00010,
             '584ce7acb3384c36bf252fde72063a56': 0.00038,
-            
+
         }
         uids_list = sorted(list(OBJAVERSE_SCALES.keys()))
         model_ids = randomization.uniform(0.0, float(len(uids_list)), size=(num_objects,)).cpu().numpy().astype(int)
@@ -292,6 +315,9 @@ class StackCubeEnv(BaseEnv):
             self._load_scene_objaverse(num_objects)
         else:
             raise ValueError
+        
+        assert len(self.objects) == num_objects, f"Expected {num_objects} objects, got {len(self.objects)}"
+        assert len(self.objects_descr) == num_objects, f"Expected {num_objects} objects, got {len(self.objects_descr)}"
         
         #set_trace()
 

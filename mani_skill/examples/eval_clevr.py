@@ -11,7 +11,9 @@ import clevr_env  # do import to register env, not used otherwise
 from utils_env_interventions import move_object_onto
 from utils_trajectory import project_points, generate_curve_torch, plot_gradient_curve
 
-from gen_dataset import Args, reset_random
+# [NH] This is missing?
+# from gen_dataset import Args, reset_random
+from run_env import Args, reset_random
 
 from pdb import set_trace
 
@@ -21,8 +23,9 @@ class EnvWrapper:
         args = Args()
         args.env_id = "ClevrMove-v1"
         args.control_mode = "pd_joint_pos"
+        args.object_dataset = "objaverse"
         #args.num_envs = 2
-        self.env : BaseEnv = gym.make(
+        self.env = gym.make(
             args.env_id,
             obs_mode=args.obs_mode,
             reward_mode=args.reward_mode,
@@ -33,10 +36,11 @@ class EnvWrapper:
             viewer_camera_configs=dict(shader_pack=args.shader),
             num_envs=args.num_envs,
             sim_backend=args.sim_backend,
+            object_dataset=args.object_dataset,
             parallel_in_single_scene=parallel_in_single_scene,
             # **args.env_kwargs
         )
-        reset_random(args)
+        reset_random(args, orig_seeds=None)
         self.args = args
         self.env_idx = 0
     
