@@ -165,7 +165,7 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
     print("action encoder", args.action_encoder)
 
     orig_seeds = args.seed
-    for i in range(max_iter):    
+    for i in range(max_iter):
         reset_random(args, orig_seeds)
         obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         if args.seed is not None:
@@ -460,7 +460,6 @@ if __name__ == "__main__":
             parsed_args.seed = seeds
 
     if dataset_path is None:
-        parsed_args.obs_mode = "state_dict"
         env_iter = iterate_env(parsed_args, vis=True)
         while True:
             _ = next(env_iter)

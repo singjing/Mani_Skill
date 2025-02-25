@@ -50,13 +50,17 @@ def convert_to_tensor(matrix):
         return torch.tensor(matrix, dtype=torch.float32)
         
 class DummyCamera:
-    def __init__(self, intrinsic_matrix, extrinsic_matrix, width, height):
-        self.intrinsic_matrix = convert_to_tensor(intrinsic_matrix)
-        self.extrinsic_matrix = convert_to_tensor(extrinsic_matrix)
+    def __init__(self, intrinsic_matrix=None, extrinsic_matrix=None, width=None, height=None):
+        if intrinsic_matrix is not None:
+            self.intrinsic_matrix = convert_to_tensor(intrinsic_matrix)
+        if extrinsic_matrix is not None:
+            self.extrinsic_matrix = convert_to_tensor(extrinsic_matrix)
         self.width = width
         self.height = height
+
     def get_extrinsic_matrix(self):
         return self.extrinsic_matrix
+    
     def get_intrinsic_matrix(self): 
         return self.intrinsic_matrix
 

@@ -363,7 +363,14 @@ def decode_trajectory_xyzrotvec(caption, camera=None, robot_pose=None):
 
 def encode_trajectory_xyzrotvec2(curve_3d, orns_3d, camera, robot_pose=None, return_didclip=False):
     """
-    Trajectory encoded as y, x, z with x, y being pixel positions in range (0, 1023) and z being depth in cm
+    Arguments:
+        curve_3d: position in [m]
+        orns_3d: pose in quaternion, scalar first
+
+    Returns:
+        Trajectory encoded as y, x, z with:
+            x, y being pixel positions in range (0, 1023) and
+            z being depth in cm
     """
     # In theory this code should handle (N, 7) poses, but for now we only support single envs
     DEPTH_SCALE = 100
@@ -409,6 +416,13 @@ def encode_trajectory_xyzrotvec2(curve_3d, orns_3d, camera, robot_pose=None, ret
 def decode_caption_xyzrotvec2(caption, camera=None, robot_pose=None):
     """
     Takes a trajectory string and converts it into curve_25d, quat_c
+    
+    Arguments:
+        caption: see encode_trajectory_xyzrotvec2
+
+    Returns:
+        curve_3d: position in [m]
+        orns_3d: pose in quaternion, scalar first
     """
     num_tokens = 6
     DEPTH_SCALE = 100

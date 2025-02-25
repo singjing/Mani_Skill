@@ -37,7 +37,7 @@ def check_and_fix_format(label):
     if '<loc-' in label["suffix"]:
         print("found <loc- in", label["suffix"])
     if '<loc-' in label["prefix"]:
-        print("found <loc- in", label["suffix"])
+        print("found <loc- in", label["prefix"])
 
 def encode_actions(label, stats=None, encoding="xyzrotvec-cam", i=None, dataset_path=None):
     """
@@ -276,8 +276,14 @@ if __name__ == "__main__":
     # dataset_path = Path("/tmp/clevr-act-6-fxd-cam")
     # split_dataset(dataset_path, action_encoding = "xyzrotvec-cam")
 
-    dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v1")
-    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2", train_ratio=0)
+    #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v1")
+    #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2", train_ratio=0)
 
-    #dataset_path = Path("/tmp/clevr-act-6-var-cam")
+    #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-1of5c-v1")
+    #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2", train_ratio=0)
+
+    #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-act-6-var-cam2")
     #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2")
+
+    dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-1of5c-v1")
+    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2")
