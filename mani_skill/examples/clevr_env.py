@@ -192,10 +192,10 @@ class StackCubeEnv(BaseEnv):
 
         for uuid in uuids:
             obj_builder = get_spok_builder(self.scene, uuid, add_collision=True, add_visual=True)
-            # TODO Update name?
             model_name=f"{uuid}"
             self.objects.append(obj_builder.build(name=f"{model_name}"))
-            self.objects_descr.append(dict(size="", color="", shape=model_name))
+            # TODO Come up with a better shape name --> use description to prompt
+            self.objects_descr.append(dict(size="", color="", shape=SpokDataset.spok_annotations[uuid]["category"]))
 
             # from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
             # print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
