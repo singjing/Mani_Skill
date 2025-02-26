@@ -167,7 +167,15 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
     orig_seeds = args.seed
     for i in range(max_iter):
         reset_random(args, orig_seeds)
-        obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
+        try:
+            obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
+        except RuntimeError as e:
+            print(f"Encountered RuntimeError {e = } while resetting env. Skipping this iteration.")
+            continue
+        # Let the objects settle (!)
+        for _ in range(20):
+            _ = env.step(obs["agent"]["qpos"][..., :8])
+    
         if args.seed is not None:
             env.action_space.seed(args.seed[0])
         if vis and args.render_mode is not None:
