@@ -22,6 +22,8 @@ from mani_skill.utils.io_utils import load_json
 from mani_skill.examples.utils_env_interventions import move_object_onto
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
 from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
+from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
+
 
 from pdb import set_trace
 
@@ -40,7 +42,15 @@ class StackCubeEnv(BaseEnv):
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.scene_dataset = scene_dataset
         self.object_dataset = object_dataset
-        self.object_region = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
+        # TODO [NH] This seems not as intended? I would expect it was intended to go 
+        # from -0.1 to 0.1 and -0.2 to 0.2. But now it goes from -0.1 to -0.2 and 0.1 to 0.2
+        # self.object_region = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
+        # TODO This is the fix:
+        if object_dataset in ["clevr", "ycb"]:
+            self.object_region = np.array([[-0.1, 0.1], [-0.2, 0.2], [.12,.12]])
+        elif object_dataset == "objaverse":
+            # Larger objects --> more space to sample from
+            self.object_region = np.array([[-0.3, 0.1], [-0.2, 0.2], [.12,.12]])
         #self.cam_size = 224
         self.cam_size = 448
 
@@ -351,19 +361,29 @@ class StackCubeEnv(BaseEnv):
             if self.scene_dataset == "ProcTHOR":
                 xyz[:, 2] = self.object_region[2][0]
             else:
-                xyz[:, 2] = 0.02
-                xy = torch.rand((b, 2)) * 0.2 - 0.1
+                xyz[:, 2] = 0.0 #0.02
+                # Random global shift
+                xy = torch.rand((b, 2)) * 0.2 - 0.1 # rand is uniform [0,1], so shift to [-0.1, 0.1]
 
-            sampler = randomization.UniformPlacementSampler(bounds=self.object_region[:2], batch_size=b)
-            radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001
+            # We have to flip the object region as it is defined as 
+            #   [[min_1, max_1], [min_2, max_2], ...]
+            # but the sampler expects
+            #   [[min_1, min_2, ...], [max_1, max_2, ...]]
+            sampler = randomization.UniformPlacementSampler(bounds=self.object_region[:2].T, batch_size=b)
+            
+            # TODO [NH] This is not good, radius should depend on the object 
+            # radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001 # Radius is get
+            
             for shape, descr in zip(self.objects, self.objects_descr):
+                # Get radius of object
+                radius = np.linalg.norm(get_actor_obb(shape).primitive.extents) / 2
                 if self.scene_dataset == "ProcTHOR":
                     region_mins = [x[0] for x in self.object_region]
                     region_maxs = [x[1] for x in self.object_region]
                     xyz[:,] = randomization.uniform(region_mins, region_maxs, size=(1,))
                     xyz[:,2] += 0.02
                 else:
-                    shape_xy = xy + sampler.sample(radius, max_trials=100)
+                    shape_xy = xy + sampler.sample(radius, max_trials=100, verbose=True)
                     xyz[:, :2] = shape_xy
 
                 qs = randomization.random_quaternions(

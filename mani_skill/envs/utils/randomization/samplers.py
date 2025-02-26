@@ -73,6 +73,7 @@ class UniformPlacementSampler:
             else:
                 if verbose:
                     print("Fail to find a valid sample!")
+                raise RuntimeError("Fail to find a valid sample!")
         if append:
             if self.fixture_positions is None:
                 self.fixture_positions = sampled_pos[None, ...]
