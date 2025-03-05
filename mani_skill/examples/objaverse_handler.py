@@ -158,12 +158,15 @@ class SpokDatasetBuilder:
         # Default small scale for debugging
         # scale = 0.1
 
-        # Scale such that the smallest extent should fit in the gripper of panda (0.08m) --> 0.07m with margin
+        # Scale such that the smallest xy extent should fit in the gripper of panda (0.08m) --> 0.07m with margin
         annotation = self.spok_annotations[obj_uuid]
         bbox = get_bounding_box_from_annotation(annotation)
         extents = bbox[1] - bbox[0]
+        # We only are interested in the xy extents, but since the objects 
+        # are in a different frame, we need to take indices for 0, 2
+        scale = 0.07 / min(extents[0], extents[2])
         # We do not want to make the objects larger
-        scale = min(0.07 / np.min(extents), 1.0)
+        scale = min(scale, 1.0)
 
         return scale
 
