@@ -3,11 +3,12 @@ import json
 import requests
 import tarfile
 
-from typing import List, Dict, Literal
+from typing import List, Dict, Literal, Optional
 
 import numpy as np
 import transforms3d
 import sapien
+import itertools
 
 from mani_skill.envs.utils import randomization
 
@@ -24,6 +25,7 @@ except ImportError:
 
 import gzip
 import shutil
+import numpy as np
 
 OBJAVERSE_ROOT_PATHS: dict = {
     "MAX": pathlib.Path("/home/argusm/.objaverse/hf-objaverse-v1/"),
@@ -63,7 +65,12 @@ def get_bounding_box_from_annotation(annotation: Dict) -> np.ndarray:
 
 class SpokDatasetBuilder:
 
-    def __init__(self, spok_root_path, only_downloaded=False):
+    def __init__(
+        self,
+        spok_root_path,
+        maximum_objects: Optional[int] = None,
+        only_downloaded=False,
+    ):
         """ """
         self.spok_root_path = spok_root_path
 
@@ -71,6 +78,7 @@ class SpokDatasetBuilder:
         self._spok_annotations = None
         self._filtered_spok_annotations = None
 
+        self.maximum_objects = maximum_objects
         self._only_downloaded = only_downloaded
 
         # self._spok_filter = lambda
@@ -127,6 +135,21 @@ class SpokDatasetBuilder:
                 for key, annotation in self.spok_annotations.items()
                 if filter_func(annotation)
             }
+
+            if (
+                self.maximum_objects
+                and len(self._filtered_spok_annotations) > self.maximum_objects
+            ):
+                print(
+                    f"Warning: Limiting the number of Spok objects to {self.maximum_objects}"
+                )
+                # isslice preverses the input order
+                self._filtered_spok_annotations = dict(
+                    itertools.islice(
+                        self._filtered_spok_annotations.items(), self.maximum_objects
+                    )
+                )
+                assert len(self._filtered_spok_annotations) == self.maximum_objects
 
         return self._filtered_spok_annotations
 
@@ -284,6 +307,7 @@ class SpokDatasetBuilder:
 
 SpokDataset = SpokDatasetBuilder(
     spok_root_path=SPOK_ROOT_PATHS[CURRENT_USER],
+    # maximum_objects=100,
     # only_downloaded=True,  # For debug purposes useful
 )
 print(f"Loadable {len(SpokDataset)} Spok Objects")
