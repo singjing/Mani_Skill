@@ -192,10 +192,15 @@ class StackCubeEnv(BaseEnv):
 
         for uuid in uuids:
             obj_builder = get_spok_builder(self.scene, uuid, add_collision=True, add_visual=True)
-            model_name=f"{uuid}"
+            model_name = f"{uuid}"
+            try:
+                shape_name = SpokDataset.get_gpt_name(uuid) # default is three_words
+            except Exception as e:
+                shape_name = SpokDataset.spok_annotations[uuid]["category"]
+                print(f"Could not find GPT name for {uuid}, using category attribute as {shape_name = }")
+                print(f"Exception {e =}")
             self.objects.append(obj_builder.build(name=f"{model_name}"))
-            # TODO Come up with a better shape name --> use description to prompt
-            self.objects_descr.append(dict(size="", color="", shape=SpokDataset.spok_annotations[uuid]["category"]))
+            self.objects_descr.append(dict(size="", color="", shape=shape_name))
 
             # from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
             # print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)

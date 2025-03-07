@@ -11,7 +11,7 @@ def create_text_names(env):
     objects_descr = env.objects_descr
     names = []
     for descr in objects_descr:
-        name = f'{descr["size"]} {descr["color"]} {descr["shape"]}'
+        name = f'{descr["size"]} {descr["color"]} {descr["shape"]}'.strip()
         names.append(name)
     return names
 

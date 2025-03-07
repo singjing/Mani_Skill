@@ -14,6 +14,8 @@ from mani_skill.envs.utils import randomization
 
 from mani_skill.envs.scene import ManiSkillScene
 
+from mani_skill.examples.chatgpt_describer import chatgpt_describer
+
 try:
     import trimesh
     import msgpack
@@ -80,6 +82,8 @@ class SpokDatasetBuilder:
 
         self.maximum_objects = maximum_objects
         self._only_downloaded = only_downloaded
+
+        self._reduced_gpt_descriptions = {}
 
         # self._spok_filter = lambda
 
@@ -185,7 +189,7 @@ class SpokDatasetBuilder:
         annotation = self.spok_annotations[obj_uuid]
         bbox = get_bounding_box_from_annotation(annotation)
         extents = bbox[1] - bbox[0]
-        # We only are interested in the xy extents, but since the objects 
+        # We only are interested in the xy extents, but since the objects
         # are in a different frame, we need to take indices for 0, 2
         scale = 0.07 / min(extents[0], extents[2])
         # We do not want to make the objects larger
@@ -303,6 +307,49 @@ class SpokDatasetBuilder:
         _ = self._download_spok(obj_uuid)
         trimesh_mesh = self.get_trimesh_from_spok(obj_uuid)
         trimesh_mesh.export(spok_glb_path)
+
+    def get_spok_descriptions(self, obj_uuid):
+        spok_annotation = self.spok_annotations[obj_uuid]
+        descriptions = [
+            value for key, value in spok_annotation.items() if "description" in key
+        ]
+        return descriptions
+
+    def get_condensed_gpt_description(self, obj_uuid, recreate=False):
+        descriptions = self.get_spok_descriptions(obj_uuid)
+        
+        if obj_uuid in self._reduced_gpt_descriptions:
+            return self._reduced_gpt_descriptions[obj_uuid]
+
+        # TODO Check if already saved --> load from file
+        chatgpt_description_path = (
+            self.spok_models_path / obj_uuid / "chatgpt_description.json"
+        )
+        if chatgpt_description_path.exists() and not recreate:
+            with chatgpt_description_path.open("r") as f_obj:
+                reduced_description = json.load(f_obj)
+        else:
+            # Model dump converts the pydantic base model to a dict
+            reduced_description = chatgpt_describer.describe(descriptions).model_dump()
+            with chatgpt_description_path.open("w") as f_obj:
+                json.dump(reduced_description, f_obj)
+
+        self._reduced_gpt_descriptions[obj_uuid] = reduced_description
+        return reduced_description
+
+    def get_gpt_name(
+        self,
+        obj_uuid,
+        words: Literal[
+            "one_word", "two_words", "three_words", "four_words", "five_words"
+        ] = "three_words",
+    ):
+        return self.get_condensed_gpt_description(obj_uuid)[words]
+
+    def get_gpt_household(self, obj_uuid):
+        return self.get_condensed_gpt_description(obj_uuid)[
+            "is_common_household_object"
+        ]
 
 
 SpokDataset = SpokDatasetBuilder(
