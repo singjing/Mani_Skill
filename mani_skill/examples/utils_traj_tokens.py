@@ -29,13 +29,30 @@ def normalize_imgcoord(traj, resolution_wh):
     return traj_1024
 
 
-def to_prefix_suffix(obj_start, obj_end, camera, grasp_pose, tcp_pose, action_text, enc_func, robot_pose=None):
-    #grasp_start = grasp_pose
-    #grasp_end = obj_end * obj_start.inv() * grasp_pose
-    _, curve_3d = generate_curve_torch(obj_start.get_p(), obj_end.get_p(), num_points=2)
+def to_prefix_suffix(obj_start, obj_end, camera, grasp_pose, tcp_pose, action_text, enc_func, robot_pose=None, num_points=2):
+    """
+    This function generates a trajectory that moves the object from obj_start to obj_end,
+    assuming we grasp the object at obj_start with grasp_pose. It keeps the same relative position
+    between object and grasp pose.
+    """
+    batch_size = 1
+    grasp_start = grasp_pose
+    grasp_end = obj_end * obj_start.inv() * grasp_pose  # keep same object->grasp relation
+    _, curve_3d = generate_curve_torch(grasp_start.get_p(), grasp_end.get_p(), num_points=2)
+    #_, curve_3d = generate_curve_torch(obj_start.get_p(), obj_end.get_p(), num_points=2)
+    assert curve_3d.shape == (batch_size, num_points, 3)
     # Always keep rotation at grap pose
-    orns_3d = grasp_pose.get_q().clone().detach()  # get rotation
-    orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
+    #orns_3d = grasp_start.get_q().clone().detach()  # get rotation
+    #orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
+    if num_points != 2:
+        # What you probably want to do here is interpolate between orns.
+        raise NotImplementedError("See code comment above for tip here.")
+    orns_3d = torch.stack((grasp_start.get_q().clone().detach(),grasp_end.get_q().clone().detach()),axis=1)
+    assert orns_3d.shape == (batch_size, num_points, 4)
+
+    #from pdb import set_trace
+    #set_trace()
+    #print(orns_3d.shape)
     curve_25d, depth, token_str, didclip_traj = enc_func(curve_3d, orns_3d, camera, robot_pose=robot_pose, return_didclip=True)
     # encode tcp position in prompt (prefix)
     _, _, tcp_str, didclip_tcp = enc_func(tcp_pose.get_p().unsqueeze(0), tcp_pose.get_q().unsqueeze(0), camera, robot_pose=robot_pose, return_didclip=True)   
