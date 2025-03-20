@@ -1,7 +1,7 @@
 """
 
 """
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, Optional
 
 import numpy as np
 import torch
@@ -105,23 +105,24 @@ class StackCubeEnv(BaseEnv):
     @property
     def _default_human_render_camera_configs(self):
         return self.render_camera_config
-
         
-    def _load_agent(self, options: dict):
-        super()._load_agent(options, sapien.Pose(p=[-0.0, 0, 0]))
+    def _load_agent(self, options: dict, initial_agent_poses: Optional[Union[sapien.Pose, Pose]] = None):
+        super()._load_agent(options, initial_agent_poses) #sapien.Pose(p=[0.0, 0, 0]))
 
     def _load_scene_clevr(self, num_objects, min_unique=2, max_attempts=100):
         # Geometric sahpes, inspired by CLEVR
-        shapes = {"sphere":actors.build_sphere, "cube":actors.build_cube } # "cylinder":actors.build_cylinder}
+        shapes = {"sphere":actors.build_sphere, "cube":actors.build_cube, "box":actors.build_box} # "cylinder":actors.build_cylinder}
         colors = {"gray": [87, 87, 87],  "red": [173, 35, 35], "blue": [42, 75, 215], "green": [29, 105, 20],
                   "brown": [129, 74, 25], "purple": [129, 38, 192], "cyan": [41, 208, 208], "yellow": [255, 238, 51]}
         sizes = {"large": 0.7/10./2., "small": 0.35/10./2.}
-
         # Make sure that there are at least min_unique unique (non-duplicate) objects
+        assert max_attempts > 0
+        unique, counts = None, None
         for _ in range(max_attempts):
             shapes_choice = randomization.uniform(0.0, float(len(shapes)),size=(num_objects,)).cpu().numpy().astype(int)
             colors_choice = randomization.uniform(0.0, float(len(colors)),size=(num_objects,)).cpu().numpy().astype(int)
             sizes_choice = randomization.uniform(0.0, float(len(sizes)),size=(num_objects,)).cpu().numpy().astype(int)
+            upright_choice = randomization.uniform(0.0, float(2),size=(num_objects,)).cpu().numpy().astype(int)
             shape_array = np.array((shapes_choice, colors_choice, sizes_choice)).T
             unique, counts = np.unique(shape_array, axis=0, return_counts=True)
             if np.sum(counts==1) >= min_unique:
@@ -142,7 +143,13 @@ class StackCubeEnv(BaseEnv):
             size_name, size = list(sizes.items())[sizes_choice[i]]
             color = list(np.array(color + [255.,])/255.)
             initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
-            tmp = build_function(self.scene, size, color=color, name=f"{shape_name}_{i}", initial_pose=initial_pose)
+            if shape_name == "box":
+                if upright_choice[i] == 0:
+                    tmp = build_function(self.scene, (2*size, size, size), color=color, name=f"{shape_name}_{i}", initial_pose=initial_pose)
+                else:
+                    tmp = build_function(self.scene, (size, size, 2*size), color=color, name=f"{shape_name}_{i}", initial_pose=initial_pose)
+            else:
+                tmp = build_function(self.scene, size, color=color, name=f"{shape_name}_{i}", initial_pose=initial_pose)
             self.objects.append(tmp)
             # now do text description
             descr = dict(shape=shape_name,
@@ -170,7 +177,7 @@ class StackCubeEnv(BaseEnv):
             )
             builder.initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
             #builder.set_scene_idxs([i])
-            model_name = " ".join(model_id.split("_")[1:])
+            model_name = " ".join(str(model_id).split("_")[1:])
             self.objects.append(builder.build(name=f"{model_id}-{i}"))
             self.objects_descr.append(dict(size="", color="", shape=model_name))
 
@@ -237,7 +244,7 @@ class StackCubeEnv(BaseEnv):
 
         min_objects = 2
         max_objects = 5
-        #num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
+        num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
         num_objects = 3
         
         self.objects = []
@@ -254,8 +261,6 @@ class StackCubeEnv(BaseEnv):
         assert len(self.objects) == num_objects, f"Expected {num_objects} objects, got {len(self.objects)}"
         assert len(self.objects_descr) == num_objects, f"Expected {num_objects} objects, got {len(self.objects_descr)}"
         
-        #set_trace()
-
         self.cubeA = self.objects[0]  
         self.cubeB = self.objects[1]
         

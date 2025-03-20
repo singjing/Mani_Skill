@@ -30,6 +30,7 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
         depth=FINGER_LENGTH,
     )
     closing, center = grasp_info["closing"], grasp_info["center"]
+    # this builds a grasp, which has position of center
     grasp_pose = env.agent.build_grasp_pose(approaching, closing, center)
 
     if object_is_rotationally_invariant(env.cubeA):
