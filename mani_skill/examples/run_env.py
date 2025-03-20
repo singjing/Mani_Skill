@@ -1,6 +1,7 @@
 """
 Option 1: record inital frames:
-python run_env.py 
+python run_env.py
+python run_env.py -od objaverse
 
 Option 2: record trajectories (e.g. with rt shader)
 python run_env.py --record_dir /tmp/clevr-obs-extra
@@ -14,17 +15,17 @@ import matplotlib.pyplot as plt
 import os
 import json
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-from PIL import Image
+#from concurrent.futures import ThreadPoolExecutor
+#from PIL import Image
 from tqdm import tqdm
-from scipy.spatial.transform import Rotation as R
+#from scipy.spatial.transform import Rotation as R
 import time
     
 import tyro
 from dataclasses import dataclass
 from typing import List, Optional, Annotated, Union
 
-from mani_skill.envs.sapien_env import BaseEnv
+#from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.utils.wrappers import RecordEpisode
 from mani_skill.utils.structs import Pose
         
@@ -103,6 +104,8 @@ class Args:
     object_dataset: Annotated[Optional[str], tyro.conf.arg(aliases=["-od"])] = "clevr"
     """Dataset from which we sample objects"""
 
+    N_samples: Annotated[Optional[int], tyro.conf.arg(aliases=["-N"])] = 50
+    """Number of samples"""
 
 def reset_random(args, orig_seeds):
     if orig_seeds is None:
@@ -172,9 +175,12 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
         except RuntimeError as e:
             print(f"Encountered RuntimeError {e = } while resetting env. Skipping this iteration.")
             continue
+        
+        # Note: when using RecordEpisode this will create 20x the number of saved frames
+        # so 75GB -> 1.5 TB, which is no good.
         # Let the objects settle (!)
-        for _ in range(20):
-            _ = env.step(obs["agent"]["qpos"][..., :8])
+        #for _ in range(20):
+        #    _ = env.step(obs["agent"]["qpos"][..., :8])
     
         if args.seed is not None:
             env.action_space.seed(args.seed[0])
@@ -472,9 +478,8 @@ if __name__ == "__main__":
         while True:
             _ = next(env_iter)
     else:
-        N_samples = int(140_000+10_000)
         #asyncio.run(save_multiproces(parsed_args, N_samples))
-        save_multiproces(parsed_args, N_samples)
+        save_multiproces(parsed_args, parsed_args.N_samples, 1)
 
         # N_samples = int(2/0.8)
         #N_samples = 50

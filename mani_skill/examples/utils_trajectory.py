@@ -51,6 +51,8 @@ def convert_to_tensor(matrix):
         
 class DummyCamera:
     def __init__(self, intrinsic_matrix=None, extrinsic_matrix=None, width=None, height=None):
+        self.intrinsic_matrix = None
+        self.extrinsic_matrix = None
         if intrinsic_matrix is not None:
             self.intrinsic_matrix = convert_to_tensor(intrinsic_matrix)
         if extrinsic_matrix is not None:

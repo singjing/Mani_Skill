@@ -60,6 +60,7 @@ class StackCubeEnv(BaseEnv):
         # cached stuff for loaders
         self.objaverse_model_ids = None
         self.ycb_model_ids = None
+        self.spok_dataset = None
 
         self.initalize_render_camera_fixed()  # sets render_camera_config
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
@@ -178,26 +179,24 @@ class StackCubeEnv(BaseEnv):
         count_dict = dict(zip(unique_vals, counts))
         self.objects_unique = [count_dict[num] == 1 for num in model_ids]
 
-    def get_objaverse_asset(self, objaverse_uid):
-        """
-        Returns:
-
-        """
-
     def _load_scene_objaverse(self, num_objects: int=2):
         # TODO Refactor to make this explit as Spok?
-        from mani_skill.examples.objaverse_handler import SpokDataset, get_spok_builder
-        
-        uuids = SpokDataset.sample_uuids(num_objects, with_replacement=False)
+        from mani_skill.examples.objaverse_handler import SpokDatasetBuilder, get_spok_builder
+        if self.spok_dataset is None:
+            self.spok_dataset = SpokDatasetBuilder(maximum_objects=20_000)
+
+        #uuids = SpokDataset.sample_uuids(num_objects, with_replacement=False)
+        uuids = ['3239828896624cdaae337e1b8b5ca78f', '2bcfd1118fd245ef88c838f46960d4b3', '54a13e432b9a488ab35d1c6644d9bc0c']
 
         for uuid in uuids:
-            obj_builder = get_spok_builder(self.scene, uuid, add_collision=True, add_visual=True)
+            obj_builder = get_spok_builder(self.scene, uuid, add_collision=True, add_visual=True,
+                                           spok_dataset=self.spok_dataset)
             model_name = f"{uuid}"
             try:
-                shape_name = SpokDataset.get_gpt_name(uuid) # default is three_words
+                shape_name = self.spok_dataset.get_gpt_name(uuid) # default is three_words
             except Exception as e:
-                shape_name = SpokDataset.spok_annotations[uuid]["category"]
-                print(f"Could not find GPT name for {uuid}, using category attribute as {shape_name = }")
+                shape_name = self.spok_dataset.spok_annotations[uuid]["category"]
+                print(f"Could not find GPT name for {uuid}, using category attribute as {shape_name}")
                 print(f"Exception {e =}")
             self.objects.append(obj_builder.build(name=f"{model_name}"))
             self.objects_descr.append(dict(size="", color="", shape=shape_name))
@@ -208,86 +207,6 @@ class StackCubeEnv(BaseEnv):
         unique_vals, counts = np.unique(uuids, return_counts=True)
         count_dict = dict(zip(unique_vals, counts))
         self.objects_unique = [count_dict[num] == 1 for num in uuids]
-
-    
-    def _load_scene_objaverse_old(self, num_objects):
-        raise NotImplementedError("This is old code, use _load_scene_objaverse_new")
-        from pathlib import Path
-        num_objects = 2
-        #objaverse_folder = (ASSET_DIR / "../../.objaverse/hf-objaverse-v1/").resolve()
-        objaverse_folder = Path("/home/argusm/.objaverse/hf-objaverse-v1/")
-
-        if not objaverse_folder.exists():
-            print("Error: No objaverse files in {objaverse_folder}, try downloading files using objaverse_download.ipynb")
-            raise ValueError
-        
-        import transforms3d
-        import sapien
-        import sapien.core as sapien
-        from mani_skill.envs.scene import ManiSkillScene
-        obj_q = transforms3d.quaternions.axangle2quat(np.array([1, 0, 0]), theta=np.deg2rad(90))
-        obj_pose = sapien.Pose(q=obj_q)
-        def get_objaverse_builder(scene: ManiSkillScene, file: str, add_collision=True, add_visual=True, scale=.01):
-            builder = scene.create_actor_builder()
-            #density =  1000
-            #physical_material = None
-            if add_collision:
-                collision_file = str(file)
-                builder.add_nonconvex_collision_from_file(
-                    filename=collision_file,
-                    scale=[scale] * 3,
-                    #material=physical_material,
-                    #density=density,
-                    pose=obj_pose
-                )
-            if add_visual:
-                visual_file = str(file)
-                builder.add_visual_from_file(filename=visual_file, scale=[scale] * 3, pose=obj_pose)
-            return builder
-
-        if self.objaverse_model_ids is None:
-            # collect all objaverse assets
-            glb_files = list((objaverse_folder / "glbs").rglob("*.glb"))
-            print(f"Objaverse models found {len(glb_files)}, {objaverse_folder}")
-            self.objaverse_model_ids = glb_files
-            self.objaverse_files = dict([(x.stem, x) for x in glb_files])
-        
-        uids_list = sorted(list(self.objaverse_files.keys()))
-        OBJAVERSE_SCALES = {
-            'b5c9d06f19be4c92a1708515f6655573': 0.02,
-            '412ed49af0644f30bae822d29afbb066': 0.03,#.001,
-            '088c1883e07e4946956488171e3a06bf': 0.1,
-            '93128128f8f848d8bd261f6c1f763a53': 0.005,
-            '005a246f8c304e77b27cf11cd53ff4ed': 0.00010,
-            '584ce7acb3384c36bf252fde72063a56': 0.00038,
-
-        }
-        uids_list = sorted(list(OBJAVERSE_SCALES.keys()))
-        model_ids = randomization.uniform(0.0, float(len(uids_list)), size=(num_objects,)).cpu().numpy().astype(int)
-        model_uids = [uids_list[x] for x in model_ids]
-        model_uids = ['b5c9d06f19be4c92a1708515f6655573','412ed49af0644f30bae822d29afbb066']
-        #model_uids = ['00bfa4e5862d4d4b89f9bcf06d2a19e4', 'b5c9d06f19be4c92a1708515f6655573',]
-        model_uids = ['584ce7acb3384c36bf252fde72063a56', '088c1883e07e4946956488171e3a06bf']
-        for i, uid in enumerate(model_uids):
-            #model_id = self.objaverse_model_ids[model_idx]
-            filename = self.objaverse_files[uid]
-            try:
-                scale = OBJAVERSE_SCALES[uid]
-            except KeyError:
-                scale = .02
-            builder = get_objaverse_builder(self.scene, filename, scale=scale)
-            builder.initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
-            model_name="xxx"
-            self.objects.append(builder.build(name=f"{model_name}-{i}"))
-            self.objects_descr.append(dict(size="", color="", shape=model_name))
-
-            from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
-            print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
-        #set_trace()
-        unique_vals, counts = np.unique(model_ids, return_counts=True)
-        count_dict = dict(zip(unique_vals, counts))
-        self.objects_unique = [count_dict[num] == 1 for num in model_ids]
-
 
     def _load_scene(self, options: dict):
         self.cube_half_size = common.to_tensor([0.02] * 3)
@@ -318,7 +237,8 @@ class StackCubeEnv(BaseEnv):
 
         min_objects = 2
         max_objects = 5
-        num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
+        #num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
+        num_objects = 3
         
         self.objects = []
         self.objects_descr = []

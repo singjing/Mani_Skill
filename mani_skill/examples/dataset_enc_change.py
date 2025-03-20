@@ -278,6 +278,9 @@ if __name__ == "__main__":
 
     #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v1")
     #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2", train_ratio=0)
+    
+    dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-v2")
+    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2", train_ratio=0)
 
     #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-1of5c-v1")
     #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2", train_ratio=0)
@@ -285,5 +288,5 @@ if __name__ == "__main__":
     #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-act-6-var-cam2")
     #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2")
 
-    dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-1of5c-v1")
-    split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2")
+    #dataset_path = Path("/data/lmbraid19/argusm/datasets/clevr-real-1of5c-v1")
+    #split_dataset(dataset_path, action_encoding = "xyzrotvec-cam2")

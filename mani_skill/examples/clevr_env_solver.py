@@ -33,6 +33,7 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
     grasp_pose = env.agent.build_grasp_pose(approaching, closing, center)
 
     if object_is_rotationally_invariant(env.cubeA):
+        # TODO(max): this is bad and can cause problems, only consider z-axis
         # keep this simple for now
         grasp_pose.set_q(env.agent.tcp.pose.get_q()[0])
         #rot_initial = R.from_quat(env.agent.tcp.pose.get_q()[0].numpy(), scalar_first=True)

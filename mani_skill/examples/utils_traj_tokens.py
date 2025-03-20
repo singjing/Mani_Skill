@@ -30,7 +30,10 @@ def normalize_imgcoord(traj, resolution_wh):
 
 
 def to_prefix_suffix(obj_start, obj_end, camera, grasp_pose, tcp_pose, action_text, enc_func, robot_pose=None):
+    #grasp_start = grasp_pose
+    #grasp_end = obj_end * obj_start.inv() * grasp_pose
     _, curve_3d = generate_curve_torch(obj_start.get_p(), obj_end.get_p(), num_points=2)
+    # Always keep rotation at grap pose
     orns_3d = grasp_pose.get_q().clone().detach()  # get rotation
     orns_3d = orns_3d.expand(curve_3d.shape[0], curve_3d.shape[1], -1)
     curve_25d, depth, token_str, didclip_traj = enc_func(curve_3d, orns_3d, camera, robot_pose=robot_pose, return_didclip=True)
@@ -421,8 +424,8 @@ def decode_caption_xyzrotvec2(caption, camera=None, robot_pose=None):
         caption: see encode_trajectory_xyzrotvec2
 
     Returns:
-        curve_3d: position in [m]
-        orns_3d: pose in quaternion, scalar first
+        curve_3d: position in [px] in camera coordinates
+        orns_3d: pose in quaternion, scalar first in camera coordinates
     """
     num_tokens = 6
     DEPTH_SCALE = 100
@@ -451,6 +454,9 @@ def decode_caption_xyzrotvec2(caption, camera=None, robot_pose=None):
 def decode_trajectory_xyzrotvec2(caption, camera=None, robot_pose=None):
     """
     Takes a caption string and converts it to world coordinates
+    Returns:
+        curve_w in world/robot coordinates
+        quat_w in world/robot coordinates
     """
     curve_25d, quat_c = decode_caption_xyzrotvec2(caption, camera)
     # from camera to world coordinates

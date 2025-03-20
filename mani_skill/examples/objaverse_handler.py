@@ -14,7 +14,12 @@ from mani_skill.envs.utils import randomization
 
 from mani_skill.envs.scene import ManiSkillScene
 
-from mani_skill.examples.chatgpt_describer import chatgpt_describer
+try:
+    from mani_skill.examples.chatgpt_describer import chatgpt_describer
+except ImportError:
+    print("ChatGPT describer not loaded")
+    chatgpt_describer = None
+
 
 try:
     import trimesh
@@ -38,12 +43,11 @@ SPOK_ROOT_PATHS: dict = {
     "NICK": pathlib.Path("/home/heppert/datasets/objaverse/spok/r2_dev/"),
 }
 # TODO Do as in DITTO, i.e. through hostname?
-CURRENT_USER = "NICK"
+CURRENT_USER = "MAX"
 
 # TODO Add the objaverse path?
 # import objaverse
 # objaverse.set_base_path(str(objaverse_folder))
-
 
 get_spok_download_url = (
     lambda uid: f"https://***REMOVED***.r2.dev/assets/{uid}.tar"
@@ -69,7 +73,7 @@ class SpokDatasetBuilder:
 
     def __init__(
         self,
-        spok_root_path,
+        spok_root_path=SPOK_ROOT_PATHS[CURRENT_USER],
         maximum_objects: Optional[int] = None,
         only_downloaded=False,
     ):
@@ -98,6 +102,7 @@ class SpokDatasetBuilder:
     @property
     def spok_annotations(self) -> Dict:
         if self._spok_annotations is None:
+            print("loading spock annotations.")
             with open(self.spok_annotations_path, "rb") as f_obj:
                 self._spok_annotations = json.load(f_obj)
         return self._spok_annotations
@@ -105,6 +110,7 @@ class SpokDatasetBuilder:
     @property
     def filtered_spok_annotations(self) -> Dict:
         if self._filtered_spok_annotations is None:
+            print("filtering spock annotations.")
             # TODO Add the filter as a class/function here?
             def filter_func(annotation: Dict):
                 if annotation["scale"] > 1.0:
@@ -145,7 +151,7 @@ class SpokDatasetBuilder:
                 and len(self._filtered_spok_annotations) > self.maximum_objects
             ):
                 print(
-                    f"Warning: Limiting the number of Spok objects to {self.maximum_objects}"
+                    f"Warning: Limiting the number of Spok objects to {self.maximum_objects} of {len(self.spok_annotations)}"
                 )
                 # isslice preverses the input order
                 self._filtered_spok_annotations = dict(
@@ -328,11 +334,13 @@ class SpokDatasetBuilder:
         if chatgpt_description_path.exists() and not recreate:
             with chatgpt_description_path.open("r") as f_obj:
                 reduced_description = json.load(f_obj)
-        else:
+        elif chatgpt_describer is not None:
             # Model dump converts the pydantic base model to a dict
             reduced_description = chatgpt_describer.describe(descriptions).model_dump()
             with chatgpt_description_path.open("w") as f_obj:
                 json.dump(reduced_description, f_obj)
+        else:
+            raise ValueError(chatgpt_describer)
 
         self._reduced_gpt_descriptions[obj_uuid] = reduced_description
         return reduced_description
@@ -352,20 +360,13 @@ class SpokDatasetBuilder:
         ]
 
 
-SpokDataset = SpokDatasetBuilder(
-    spok_root_path=SPOK_ROOT_PATHS[CURRENT_USER],
-    # maximum_objects=100,
-    # only_downloaded=True,  # For debug purposes useful
-)
-print(f"Loadable {len(SpokDataset)} Spok Objects")
-
-
 # Specific for Maniskill --> TODO: Refactor into somewhere else when there is time
 def get_spok_builder(
     scene: ManiSkillScene,
     uuid,
     add_collision=True,
     add_visual=True,
+    spok_dataset:SpokDatasetBuilder = None
 ):
     # We need to rotate the object around z to make it upright?
     obj_q = transforms3d.quaternions.axangle2quat(
@@ -377,13 +378,13 @@ def get_spok_builder(
     builder = scene.create_actor_builder()
     builder.initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
 
-    scale = SpokDataset.get_object_scale(uuid)
+    scale = spok_dataset.get_object_scale(uuid)
 
     # TODO Set these?
     density = 1000
     # physical_material = None
 
-    glb_path = str(SpokDataset.get_spok_converted_glb_path(uuid))
+    glb_path = str(spok_dataset.get_spok_converted_glb_path(uuid))
 
     if add_collision:
         collision_file = glb_path
@@ -403,3 +404,11 @@ def get_spok_builder(
         )
 
     return builder
+
+if __name__ == "__main__":
+    SpokDataset = SpokDatasetBuilder(
+        spok_root_path=SPOK_ROOT_PATHS[CURRENT_USER],
+        # maximum_objects=100,
+        # only_downloaded=True,  # For debug purposes useful
+    )
+    print(f"Loadable {len(SpokDataset)} Spok Objects")
