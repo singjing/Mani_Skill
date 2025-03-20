@@ -43,19 +43,33 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     pos_new = obj_start_pose.get_p().clone().detach()  # don't forget
     pos_base = pose_base.get_p()
     pos_new[:, 0:2] = pos_base[:, 0:2]
-    
-    obbB = get_actor_obb(env.cubeB, to_world_frame=True)
-    obbA = get_actor_obb(env.cubeA, to_world_frame=True)
-    height = pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2
-    height = obbB.vertices[:, 2].max() + (obbA.vertices[:, 2].max() - obbA.vertices[:, 2].min())/2
+
+    if env.cubeB.name.startswith("clevr"):
+        print("XXX")
+        obbB = get_actor_obb(env.cubeB, to_world_frame=True)
+        obbA = get_actor_obb(env.cubeA, to_world_frame=True)
+        height = obbB.vertices[:, 2].max() + (obbA.vertices[:, 2].max() - obbA.vertices[:, 2].min())/2
+        #height = float(pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2)
+        pos_new[:, 2] = height
+
+    else:
+        obbB = get_actor_obb(env.cubeB, to_world_frame=True)
+        obbA = get_actor_obb(env.cubeA, to_world_frame=True)
+        height = float(pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2)
+        pos_new[:, 2] = height
+
     #from pdb import set_trace
     #set_trace()
-    old_height = pos_new[:, 2] + 2*pos_base[:, 2]
-    #print(">>>", old_height, height)
-    pos_new[:, 2] = height
+
+    import sapien
+    builder = env.scene.create_actor_builder()
+    builder.add_sphere_visual(pose=sapien.Pose(p=[pos_base[0][0], pos_base[0][1], height]), radius=.02, material=sapien.render.RenderMaterial(base_color=[0., 1., 0., 1.]))
+    marker_visual = builder.build_kinematic(name="marker_visual")
+    
     obj_end_pose.set_p(pos_new)
 
     if not pretend:
+        print("trying to move.")
         objects[object_id_move].set_pose(obj_end_pose)
     
     env.cubeA = objects[object_id_move]
@@ -66,6 +80,7 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     verbs = ["move", "place", "transfer", "set", "position", "lift", "relocate", "shift", "put", "bring"]
     prepositions = ["onto", "on top of", "above", "over", "to rest on", "on", "onto the surface of"]
     if randomize_text:
+        raise ValueError("Deprecated, do this in data loader.")
         verb = np.random.choice(verbs)
         prep = np.random.choice(prepositions)
     else:

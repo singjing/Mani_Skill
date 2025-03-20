@@ -12,6 +12,7 @@ from mani_skill.agents.robots import Fetch, Panda
 from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.envs.utils import randomization
 from mani_skill.sensors.camera import CameraConfig
+from mani_skill.sensors.depth_camera import StereoDepthCameraConfig
 from mani_skill.utils import common, sapien_utils
 from mani_skill.utils.building import actors
 from mani_skill.utils.registration import register_env
@@ -81,6 +82,7 @@ class StackCubeEnv(BaseEnv):
         new_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
         pose = sapien_utils.look_at(new_p, end_p)
         self.render_camera_config = CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+        #self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
 
     def initalize_render_camera_random(self):
         cylinder_c = np.array([.45, 0, .36])
@@ -97,6 +99,7 @@ class StackCubeEnv(BaseEnv):
 
         pose = sapien_utils.look_at(start_p, end_p)
         self.render_camera_config = CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+        #self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
 
     @property
     def _default_sensor_configs(self):
@@ -143,13 +146,15 @@ class StackCubeEnv(BaseEnv):
             size_name, size = list(sizes.items())[sizes_choice[i]]
             color = list(np.array(color + [255.,])/255.)
             initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
+            name = f"clevr_{shape_name}_{i}"
             if shape_name == "box":
                 if upright_choice[i] == 0:
-                    tmp = build_function(self.scene, (2*size, size, size), color=color, name=f"{shape_name}_{i}", initial_pose=initial_pose)
+                    half_extents = (2*size, size, size)
                 else:
-                    tmp = build_function(self.scene, (size, size, 2*size), color=color, name=f"{shape_name}_{i}", initial_pose=initial_pose)
+                    half_extents = (size, size, 2*size)
+                tmp = build_function(self.scene, half_extents, color=color, name=name, initial_pose=initial_pose)
             else:
-                tmp = build_function(self.scene, size, color=color, name=f"{shape_name}_{i}", initial_pose=initial_pose)
+                tmp = build_function(self.scene, size, color=color, name=name, initial_pose=initial_pose)
             self.objects.append(tmp)
             # now do text description
             descr = dict(shape=shape_name,
@@ -188,23 +193,30 @@ class StackCubeEnv(BaseEnv):
 
     def _load_scene_objaverse(self, num_objects: int=2):
         # TODO Refactor to make this explit as Spok?
-        from mani_skill.examples.objaverse_handler import SpokDatasetBuilder, get_spok_builder
+        from mani_skill.examples.objaverse_handler import SpokDatasetBuilderFast,SpokDatasetBuilder, get_spok_builder
         if self.spok_dataset is None:
-            self.spok_dataset = SpokDatasetBuilder(maximum_objects=20_000)
+            #self.spok_dataset = SpokDatasetBuilder(maximum_objects=20_000)
+            self.spok_dataset = SpokDatasetBuilderFast(maximum_objects=20_000)
 
-        #uuids = SpokDataset.sample_uuids(num_objects, with_replacement=False)
-        uuids = ['3239828896624cdaae337e1b8b5ca78f', '2bcfd1118fd245ef88c838f46960d4b3', '54a13e432b9a488ab35d1c6644d9bc0c']
+        uuids = self.spok_dataset.sample_uuids(num_objects, with_replacement=False)
+        #uuids = ['3239828896624cdaae337e1b8b5ca78f', '2bcfd1118fd245ef88c838f46960d4b3', '54a13e432b9a488ab35d1c6644d9bc0c']
 
         for uuid in uuids:
             obj_builder = get_spok_builder(self.scene, uuid, add_collision=True, add_visual=True,
                                            spok_dataset=self.spok_dataset)
             model_name = f"{uuid}"
+            shape_name = f"{uuid}"
             try:
-                shape_name = self.spok_dataset.get_gpt_name(uuid) # default is three_words
+                shape_name = self.spok_dataset.get_object_name(uuid) # default is three_words
             except Exception as e:
-                shape_name = self.spok_dataset.spok_annotations[uuid]["category"]
-                print(f"Could not find GPT name for {uuid}, using category attribute as {shape_name}")
+                print(f"Could not find CLIP name for {uuid}, using category attribute as {shape_name}")
                 print(f"Exception {e =}")
+                try:
+                    shape_name = self.spok_dataset.get_gpt_name(uuid) # default is three_words
+                except Exception as e:
+                    print(f"Could not find GPT name for {uuid}, using category attribute as {shape_name}")
+                    print(f"Exception {e =}")
+
             self.objects.append(obj_builder.build(name=f"{model_name}"))
             self.objects_descr.append(dict(size="", color="", shape=shape_name))
 
@@ -246,6 +258,9 @@ class StackCubeEnv(BaseEnv):
         max_objects = 5
         num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
         num_objects = 3
+
+        # Turn off gravity
+        self.scene.sim_config.scene_config.gravity = np.array([0,0,0])
         
         self.objects = []
         self.objects_descr = []
@@ -326,6 +341,7 @@ class StackCubeEnv(BaseEnv):
             
             # do intervention
             obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
+            print(action_text)
             self.set_goal_pose(obj_end)
             self.obj_start = obj_start
             self.obj_end = obj_end

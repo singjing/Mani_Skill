@@ -80,13 +80,8 @@ def compute_grasp_info_by_obb(
     half_size = extents[0] * 0.5
 
     # This was hte old code, didn't work with long unsymetric shapes
-    # center = center + approaching * (-half_size + min(depth, half_size))
-
-    if depth < half_size: # if extents is long, subtract grasp depth from extent
-        center = center + (-1)*approaching *(extents[0] - depth)
-    else:  # if extents is short, just grasp in the middle
-        center = center + (-1)*approaching *(half_size)
-
+    center = center + approaching * (-half_size + min(depth, half_size))
+    
     if ortho:
         closing = closing - (approaching @ closing) * approaching
         closing = common.np_normalize_vector(closing)

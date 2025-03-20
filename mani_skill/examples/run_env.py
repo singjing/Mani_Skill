@@ -145,6 +145,7 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
         robot_uids="panda",  #fetch, panda_wristcam
         scene_dataset="Table", # Table, ProcTHOR
         object_dataset=args.object_dataset, # clevr, ycb, objaverse
+        #camera_cfgs={"use_stereo_depth": True, },
         # **args.env_kwargs
     )
 
@@ -299,10 +300,12 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             
             planner.move_to_pose_with_screw(reach_pose)
             planner.move_to_pose_with_screw(grasp_pose)
+            #run_interactive(env)
             planner.close_gripper()
             planner.move_to_pose_with_screw(lift_pose)
             planner.move_to_pose_with_screw(pre_align_pose)
             planner.move_to_pose_with_screw(align_pose)
+            #run_interactive(env)
             planner.open_gripper()
             final_reward = env.unwrapped.eval_reward()[0]
             planner.close()
@@ -341,11 +344,14 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
 
 def run_interactive(env):
     env.print_sim_details()
+    print("Entering do nothing loop: Ctrl-C to continue")
+    try:
+        while True:
+            time.sleep(.1)
+            env.base_env.render_human()
+    except KeyboardInterrupt:
+        print("\nCtrl+C detected, continuing.")
 
-    print("Entering do nothing loop.")
-    while True:
-        time.sleep(.1)
-        env.base_env.render_human()
 
 
 # def save_dataset(sample_generator, N: int, dataset_path):

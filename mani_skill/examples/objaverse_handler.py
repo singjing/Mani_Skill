@@ -11,7 +11,6 @@ import sapien
 import itertools
 
 from mani_skill.envs.utils import randomization
-
 from mani_skill.envs.scene import ManiSkillScene
 
 try:
@@ -102,7 +101,7 @@ class SpokDatasetBuilder:
     @property
     def spok_annotations(self) -> Dict:
         if self._spok_annotations is None:
-            print("loading spock annotations.")
+            print("loading spock annotations, will take a while")
             with open(self.spok_annotations_path, "rb") as f_obj:
                 self._spok_annotations = json.load(f_obj)
         return self._spok_annotations
@@ -165,7 +164,7 @@ class SpokDatasetBuilder:
 
     def __len__(self):
         return len(self.filtered_spok_annotations)
-
+    
     def sample_uuids(self, num_objects: int = 1, with_replacement=False):
         uuids = randomization.choice(
             list(self.filtered_spok_annotations.keys()),
@@ -183,6 +182,11 @@ class SpokDatasetBuilder:
         #     "031ba5c3f25947db9114f7ab7f8b9e7a",
         # ][:num_objects]
         return uuids
+    
+    def get_bbox(self, obj_uuid):
+        annotation = self.spok_annotations[obj_uuid]
+        bbox = get_bounding_box_from_annotation(annotation)
+        return bbox
 
     def get_object_scale(self, obj_uuid):
         # Spok Objects are already correctly scaled in meters
@@ -192,8 +196,7 @@ class SpokDatasetBuilder:
         # scale = 0.1
 
         # Scale such that the smallest xy extent should fit in the gripper of panda (0.08m) --> 0.07m with margin
-        annotation = self.spok_annotations[obj_uuid]
-        bbox = get_bounding_box_from_annotation(annotation)
+        bbox = self.get_bbox(obj_uuid)
         extents = bbox[1] - bbox[0]
         # We only are interested in the xy extents, but since the objects
         # are in a different frame, we need to take indices for 0, 2
@@ -358,6 +361,92 @@ class SpokDatasetBuilder:
         return self.get_condensed_gpt_description(obj_uuid)[
             "is_common_household_object"
         ]
+
+    def get_object_name(self, obj_uuid):
+        return self.spok_annotations[obj_uuid][obj_uuid]["category"]
+
+
+class SpokDatasetBuilderFast(SpokDatasetBuilder):
+    def __init__(self, spok_root_path = SPOK_ROOT_PATHS[CURRENT_USER],
+                 annotation_file = SPOK_ROOT_PATHS[CURRENT_USER] / "clip_description2.jsonl",
+                 maximum_objects = None):
+        
+        # do this to get files, but try not to call anything that requires loading spok annotations, otherwise it takes long
+        super().__init__(spok_root_path)
+
+        self.clip_annotation_data = {}
+        uuids_seen = set()
+        with open(annotation_file, "r") as f_obj:
+            for line in f_obj:
+                entry = json.loads(line)
+                if entry["uid"] in uuids_seen:
+                    print("removing duplicate")
+                    continue
+                self.clip_annotation_data[entry["uid"]] = entry
+                uuids_seen.add(entry["uid"])
+
+        def filter_func(annotation: Dict, t_best_descr=-3, t_low_poly=-10, t_grayscale=-12):
+            v_low_poly = annotation["quality"]["cartoon low-poly model"]
+            v_grayscale = annotation["quality"]["grayscale image"]
+            if v_low_poly > t_low_poly:
+                return False
+            if v_grayscale > t_grayscale:
+                return False
+            
+            short_descr_values = [v for k,v in annotation["description"].items() if len(k.split()) < 4]
+            v_best_descr = max(short_descr_values)
+            if v_best_descr < t_best_descr:
+                return False
+
+            short_descr_text = [k for k,v in annotation["description"].items() if len(k.split()) < 4]
+            best_descr = short_descr_text[np.argmax(short_descr_values)]
+            blacklist_words = set(("stone", "rock", "figurine", "ring"))
+            if set(best_descr.split()).intersection(blacklist_words):
+                return False
+            return True
+        
+        self.clip_annotation_data_filterd = {}
+        for annotation in self.clip_annotation_data.values():
+            if filter_func(annotation):
+                self.clip_annotation_data_filterd[annotation["uid"]] = annotation
+
+                if maximum_objects is not None and len(self.clip_annotation_data_filterd) == maximum_objects:
+                    break
+
+    @property
+    def spok_annotations(self) -> Dict:
+        raise ValueError("You can commet this error out if you want.")
+
+    def get_object_scale(self, obj_uuid):
+        bbox = np.array(self.clip_annotation_data[obj_uuid]["bbox"])
+        extents = bbox[1] - bbox[0]
+        # We only are interested in the xy extents, but since the objects
+        # are in a different frame, we need to take indices for 0, 2
+        scale = 0.07 / min(extents[0], extents[2])
+        # We do not want to make the objects larger
+        scale = min(scale, 1.0)
+
+        return scale
+
+    
+    def get_object_name(self, obj_uuid, max_len=3):
+        annotation = self.clip_annotation_data[obj_uuid]
+        short_descr_values = [v for k,v in annotation["description"].items() if len(k.split()) <= max_len]
+        short_descr_text = [k for k,v in annotation["description"].items() if len(k.split()) <= max_len]
+        best_descr = short_descr_text[np.argmax(short_descr_values)]
+        return best_descr
+    
+    def sample_uuids(self, num_objects: int = 1, with_replacement=False):
+        uuids = randomization.choice(
+            list(self.clip_annotation_data_filterd.keys()),
+            num_objects,
+            with_replacement=with_replacement,
+        )
+        assert uuids, "No objects found"
+        assert len(uuids) == num_objects, "Not enough objects found"
+        return uuids
+
+
 
 
 # Specific for Maniskill --> TODO: Refactor into somewhere else when there is time
