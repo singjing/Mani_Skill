@@ -40,7 +40,7 @@ class StereoDepthCamera(Camera):
         self,
         camera_cfg: StereoDepthCameraConfig,
         scene: sapien.Scene,
-        renderer_type: str,
+        renderer_type: str = "sapien",
         articulation: physx.PhysxArticulation = None,
     ):
         self.camera_cfg = camera_cfg
@@ -69,7 +69,7 @@ class StereoDepthCamera(Camera):
         sensor_config.min_depth = camera_cfg.min_depth
         if self.actor is None:
             self.camera = StereoDepthSensor(
-                camera_cfg.uid, scene, sensor_config, mount=self.actor
+                camera_cfg.uid, scene, sensor_config, #mount=self.actor
             )
             self.camera.set_pose(camera_cfg.pose)
         else:

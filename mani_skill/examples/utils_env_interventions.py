@@ -45,7 +45,6 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     pos_new[:, 0:2] = pos_base[:, 0:2]
 
     if env.cubeB.name.startswith("clevr"):
-        print("XXX")
         obbB = get_actor_obb(env.cubeB, to_world_frame=True)
         obbA = get_actor_obb(env.cubeA, to_world_frame=True)
         height = obbB.vertices[:, 2].max() + (obbA.vertices[:, 2].max() - obbA.vertices[:, 2].min())/2
@@ -58,13 +57,12 @@ def move_object_onto(env, randomize_text=False, pretend=False):
         height = float(pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2)
         pos_new[:, 2] = height
 
-    #from pdb import set_trace
-    #set_trace()
-
-    import sapien
-    builder = env.scene.create_actor_builder()
-    builder.add_sphere_visual(pose=sapien.Pose(p=[pos_base[0][0], pos_base[0][1], height]), radius=.02, material=sapien.render.RenderMaterial(base_color=[0., 1., 0., 1.]))
-    marker_visual = builder.build_kinematic(name="marker_visual")
+    debug_marker = False
+    if debug_marker:
+        import sapien
+        builder = env.scene.create_actor_builder()
+        builder.add_sphere_visual(pose=sapien.Pose(p=[pos_base[0][0], pos_base[0][1], height]), radius=.02, material=sapien.render.RenderMaterial(base_color=[0., 1., 0., 1.]))
+        marker_visual = builder.build_kinematic(name="marker_visual")
     
     obj_end_pose.set_p(pos_new)
 

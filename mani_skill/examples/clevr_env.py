@@ -59,6 +59,7 @@ class StackCubeEnv(BaseEnv):
         self.RESAMPLE_CAMERA_IF_OBJS_UNSEEN = 100
 
         # cached stuff for loaders
+        self.objects = None
         self.objaverse_model_ids = None
         self.ycb_model_ids = None
         self.spok_dataset = None
@@ -109,8 +110,8 @@ class StackCubeEnv(BaseEnv):
     def _default_human_render_camera_configs(self):
         return self.render_camera_config
         
-    def _load_agent(self, options: dict, initial_agent_poses: Optional[Union[sapien.Pose, Pose]] = None):
-        super()._load_agent(options, initial_agent_poses) #sapien.Pose(p=[0.0, 0, 0]))
+    def _load_agent(self, options: dict, initial_agent_poses: Optional[Union[sapien.Pose, Pose]] = sapien.Pose(p=[0.0, 0, 0])):
+        super()._load_agent(options, initial_agent_poses) 
 
     def _load_scene_clevr(self, num_objects, min_unique=2, max_attempts=100):
         # Geometric sahpes, inspired by CLEVR
@@ -223,13 +224,13 @@ class StackCubeEnv(BaseEnv):
             # from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
             # print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
         
+        #set_trace()
+
         unique_vals, counts = np.unique(uuids, return_counts=True)
         count_dict = dict(zip(unique_vals, counts))
         self.objects_unique = [count_dict[num] == 1 for num in uuids]
 
     def _load_scene(self, options: dict):
-        self.cube_half_size = common.to_tensor([0.02] * 3)
-
         if self.scene_dataset == "Table":
             self.table_scene = TableSceneBuilder(env=self, robot_init_qpos_noise=self.robot_init_qpos_noise)
             self.table_scene.build()
@@ -257,8 +258,7 @@ class StackCubeEnv(BaseEnv):
         min_objects = 2
         max_objects = 5
         num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
-        num_objects = 3
-
+        
         # Turn off gravity
         self.scene.sim_config.scene_config.gravity = np.array([0,0,0])
         
@@ -283,6 +283,7 @@ class StackCubeEnv(BaseEnv):
         """
         Returns True if objects are visible from camera, else return False.
         """
+        # TODO(max): This should really be fixed at some point.
         # just make use of the encoding function for now, at some point write a function
         grasp_pose = obj_a
         tcp_pose = obj_a
@@ -294,8 +295,6 @@ class StackCubeEnv(BaseEnv):
         if info["didclip_traj"]:
             return False
         return True
-
-
     
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         with torch.device(self.device):
@@ -328,7 +327,7 @@ class StackCubeEnv(BaseEnv):
                     xyz[:,] = randomization.uniform(region_mins, region_maxs, size=(1,))
                     xyz[:,2] += 0.02
                 else:
-                    shape_xy = xy + sampler.sample(radius, max_trials=100, verbose=True)
+                    shape_xy = xy + sampler.sample(radius, max_trials=100, verbose=False)
                     xyz[:, :2] = shape_xy
 
                 qs = randomization.random_quaternions(
@@ -341,7 +340,6 @@ class StackCubeEnv(BaseEnv):
             
             # do intervention
             obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
-            print(action_text)
             self.set_goal_pose(obj_end)
             self.obj_start = obj_start
             self.obj_end = obj_end
@@ -349,7 +347,6 @@ class StackCubeEnv(BaseEnv):
             from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb    
             grasp_pose, _ = get_grasp_pose_and_obb(self)
             self.grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
-
 
             are_visible = False
             if self.RANDOMIZE_VIEW:
@@ -374,12 +371,17 @@ class StackCubeEnv(BaseEnv):
         self.objA_goal_pose = objA_goal_pose
         self.objA_to_goal_dist_inital = torch.linalg.norm(self.cubeA.pose.p - objA_goal_pose.p, axis=1)
 
+    # For the old rewards see: ../mani_skill/envs/tasks/tabletop/stack_cube.py
     def eval_reward(self):
         objA_pose = self.cubeA.pose.p
         objA_to_goal_dist = torch.linalg.norm(objA_pose - self.objA_goal_pose.p, axis=1)
         reward = torch.clamp(1 - objA_to_goal_dist / self.objA_to_goal_dist_inital, 0, 1)
         return reward
-        
+
+    def compute_normalized_dense_reward(
+        self, obs: Any, action: torch.Tensor, info: Dict
+    ):
+        return self.eval_reward()
 
     def _get_obs_extra(self, info: Dict):
         tcp_pose = self.agent.tcp.pose
@@ -388,80 +390,16 @@ class StackCubeEnv(BaseEnv):
                    grasp_pose=self.grasp_pose.raw_pose, tcp_pose=tcp_pose.raw_pose, robot_pose=robot_pose.raw_pose)
         obs["action_text_"+self.action_text] = 123
         return obs
-        # obs = dict(tcp_pose=self.agent.tcp.pose.raw_pose)
-        # if "state" in self.obs_mode:
-        #     obs.update(
-        #         cubeA_pose=self.cubeA.pose.raw_pose,
-        #         cubeB_pose=self.cubeB.pose.raw_pose,
-        #         tcp_to_cubeA_pos=self.cubeA.pose.p - self.agent.tcp.pose.p,
-        #         tcp_to_cubeB_pos=self.cubeB.pose.p - self.agent.tcp.pose.p,
-        #         cubeA_to_cubeB_pos=self.cubeB.pose.p - self.cubeA.pose.p,
-        #     )
-        # return obs
-
-    def compute_normalized_dense_reward(
-        self, obs: Any, action: torch.Tensor, info: Dict
-    ):
-        return self.eval_reward()
     
-    # # This is the old code below. It is not used in the current implementation.
-    # def evaluate(self):
-    #     pos_A = self.cubeA.pose.p
-    #     pos_B = self.cubeB.pose.p
-    #     offset = pos_A - pos_B
-    #     xy_flag = (
-    #         torch.linalg.norm(offset[..., :2], axis=1)
-    #         <= torch.linalg.norm(self.cube_half_size[:2]) + 0.005
-    #     )
-    #     z_flag = torch.abs(offset[..., 2] - self.cube_half_size[..., 2] * 2) <= 0.005
-    #     is_cubeA_on_cubeB = torch.logical_and(xy_flag, z_flag)
-    #     # NOTE (stao): GPU sim can be fast but unstable. Angular velocity is rather high despite it not really rotating
-    #     is_cubeA_static = self.cubeA.is_static(lin_thresh=1e-2, ang_thresh=0.5)
-    #     is_cubeA_grasped = self.agent.is_grasping(self.cubeA)
-    #     success = is_cubeA_on_cubeB * is_cubeA_static * (~is_cubeA_grasped)
-    #     return {
-    #         "is_cubeA_grasped": is_cubeA_grasped,
-    #         "is_cubeA_on_cubeB": is_cubeA_on_cubeB,
-    #         "is_cubeA_static": is_cubeA_static,
-    #         "success": success.bool(),
-    #     }
-
-    # def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
-    #     # reaching reward
-    #     tcp_pose = self.agent.tcp.pose.p
-    #     cubeA_pos = self.cubeA.pose.p
-    #     cubeA_to_tcp_dist = torch.linalg.norm(tcp_pose - cubeA_pos, axis=1)
-    #     reward = 2 * (1 - torch.tanh(5 * cubeA_to_tcp_dist))
-
-    #     # grasp and place reward
-    #     cubeA_pos = self.cubeA.pose.p
-    #     cubeB_pos = self.cubeB.pose.p
-    #     goal_xyz = torch.hstack(
-    #         [cubeB_pos[:, 0:2], (cubeB_pos[:, 2] + self.cube_half_size[2] * 2)[:, None]]
-    #     )
-    #     cubeA_to_goal_dist = torch.linalg.norm(goal_xyz - cubeA_pos, axis=1)
-    #     place_reward = 1 - torch.tanh(5.0 * cubeA_to_goal_dist)
-
-    #     reward[info["is_cubeA_grasped"]] = (4 + place_reward)[info["is_cubeA_grasped"]]
-
-    #     # ungrasp and static reward
-    #     gripper_width = (self.agent.robot.get_qlimits()[0, -1, 1] * 2).to(
-    #         self.device
-    #     )  # NOTE: hard-coded with panda
-    #     is_cubeA_grasped = info["is_cubeA_grasped"]
-    #     ungrasp_reward = (
-    #         torch.sum(self.agent.robot.get_qpos()[:, -2:], axis=1) / gripper_width
-    #     )
-    #     ungrasp_reward[~is_cubeA_grasped] = 1.0
-    #     v = torch.linalg.norm(self.cubeA.linear_velocity, axis=1)
-    #     av = torch.linalg.norm(self.cubeA.angular_velocity, axis=1)
-    #     static_reward = 1 - torch.tanh(v * 10 + av)
-    #     reward[info["is_cubeA_on_cubeB"]] = (
-    #         6 + (ungrasp_reward + static_reward) / 2.0
-    #     )[info["is_cubeA_on_cubeB"]]
-    #     reward[info["success"]] = 8
-    #     return reward
-
-    # def compute_normalized_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
-    #     return self.compute_dense_reward(obs=obs, action=action, info=info) / 8
-
+    def reset(self, seed: Union[None, int, list[int]] = None, options: Union[None, dict] = None):
+        if self.object_dataset == "clevr":
+            pass
+        elif self.object_dataset == "ycb" or self.object_dataset == "objaverse":
+            if self.objects is not None:
+                for object in self.objects:
+                    object.remove_from_scene()
+                    del object
+        else:
+            raise ValueError
+        #set_trace()
+        return super().reset(seed=seed, options=options)

@@ -4,6 +4,7 @@ import requests
 import tarfile
 
 from typing import List, Dict, Literal, Optional
+import PIL
 
 import numpy as np
 import transforms3d
@@ -23,7 +24,6 @@ except ImportError:
 try:
     import trimesh
     import msgpack
-    import PIL
 except ImportError:
     print(
         "Trimesh, msgpack, PIL, not installed, please install it using `pip install trimesh msgpack pillow` if you would want to convert Spok objects to .glb"
@@ -215,7 +215,7 @@ class SpokDatasetBuilder:
         assert spok_glb_path.exists(), f"glb file not found {spok_glb_path}"
         return spok_glb_path
 
-    def _download_spok(self, obj_uuid) -> pathlib.Path:
+    def _download_spok(self, obj_uuid) -> type[pathlib.Path | None]:
         spok_archive_path = (self.spok_models_path / obj_uuid).with_suffix(".tar")
 
         if not (spok_archive_path.exists() and spok_archive_path.stat().st_size > 8192):
@@ -250,7 +250,7 @@ class SpokDatasetBuilder:
 
         return spok_obj_dir
 
-    def get_trimesh_from_spok(self, obj_uuid):
+    def get_trimesh_from_spok(self, obj_uuid, warn=False):
         spok_obj_path = self._download_spok(obj_uuid)
 
         # TODO Fix me?
@@ -289,7 +289,7 @@ class SpokDatasetBuilder:
         # random_color_visual = trimesh.visual.ColorVisuals(vertex_colors=np.random.rand(vertices_np.shape[0], 4))
 
         # When albedo is all black
-        if np.all(np.asarray(albedo_img) < 0.001):
+        if warn and np.all(np.asarray(albedo_img) < 0.001):
             print(
                 "[WARNING] All black albedo image, flipping albedo and emission, [NH]: Not sure why this happens"
             )

@@ -26,7 +26,6 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
 
     if env.cubeB.name.startswith("clevr"):
         compute_grasp_info_by_obb_func = compute_grasp_info_by_obb_clevr
-        print("YYY")
     else:
         compute_grasp_info_by_obb_func = compute_grasp_info_by_obb
 
