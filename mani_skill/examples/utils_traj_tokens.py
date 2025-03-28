@@ -463,12 +463,22 @@ def decode_trajectory_xyzrotvec_rbt(caption, camera=None, robot_pose=None):
 
 
 #-----------------------------------------------------------------------------
+
 class TrajectoryEncoder_xyzrotvec2:
     num_tokens = 6
-    DEPTH_SCALE = 100
     ROT_SCALE = (128-1) / (2*np.pi)
     XY_TOKENS = 1024  # as in 1024 tokens in total going from 0 to 1023
-    
+    DEPTH_SCALE = 100  # Depth scale or range, not both!
+    DEPTH_RANGE = None # (.1, 1.0)  # [meters]  
+    DEPTH_TOKENS_START = 0
+    DEPTH_TOKENS_END = 1024
+
+    def __init__(self):
+        if self.DEPTH_SCALE:
+            assert self.DEPTH_RANGE is None
+        if self.DEPTH_RANGE:
+            assert self.DEPTH_SCALE is None
+
     def encode_trajectory(self, curve_3d, orns_3d, camera, robot_pose=None, return_didclip=False):
         """
         Arguments:
@@ -506,7 +516,18 @@ class TrajectoryEncoder_xyzrotvec2:
 
         # This is the part that is not parrelized
         env_idx = 0
-        depth_env = (depth[env_idx]*self.DEPTH_SCALE).round().int()  # distance from camera in [cm]
+        if self.DEPTH_SCALE:
+            depth_int = (depth[env_idx]*self.DEPTH_SCALE).round().int()  # distance from camera in [cm]
+        elif self.DEPTH_RANGE:
+            depth_env = np.clip(depth[env_idx], self.DEPTH_RANGE[0], self.DEPTH_RANGE[1])
+            depth_norm = (depth_env-self.DEPTH_RANGE[0]) / (self.DEPTH_RANGE[1]-self.DEPTH_RANGE[0])
+            depth_int = (depth_norm * self.DEPTH_TOKENS).round().int()
+            
+        depth_env_o = depth_int + self.DEPTH_TOKENS_START
+        depth_env = np.clip(depth_env_o, self.DEPTH_TOKENS_START, self.DEPTH_TOKENS_END)
+        if not torch.allclose(depth_env,depth_env_o):
+            print("Warning: depth out of range.", depth_env)
+        
         traj_norm = normalize_imgcoord(curve_2d_short[env_idx], (camera.width, camera.height), token_num=self.XY_TOKENS)
         rotvec_int = (rotvec_positive * self.ROT_SCALE).round().int()
         result = ""
@@ -539,7 +560,21 @@ class TrajectoryEncoder_xyzrotvec2:
         loc_numbers = [int(x) for x in loc_strings_pairs]
         loc_h = [x/(self.XY_TOKENS-1)*camera.height for x in loc_numbers[::self.num_tokens]]
         loc_w = [x/(self.XY_TOKENS-1)*camera.width for x in loc_numbers[1::self.num_tokens]]
-        loc_d = [x/self.DEPTH_SCALE for x in loc_numbers[2::self.num_tokens]]  # depth
+
+        loc_d = []
+        for x in loc_numbers[2::self.num_tokens]:
+            x_c = np.clip(x, self.DEPTH_TOKENS_START, self.DEPTH_TOKENS_END)
+            if x_c != x:
+                print("Warning: decoded depth out of range.", x)
+
+            depth_int = x_c - self.DEPTH_TOKENS_START
+            if self.DEPTH_SCALE:
+                depth = depth_int / self.DEPTH_SCALE  # Undo scaling
+            elif self.DEPTH_RANGE:
+                depth_norm = depth_int / self.DEPTH_TOKENS
+                depth = depth_norm * (self.DEPTH_RANGE[1] - self.DEPTH_RANGE[0]) + self.DEPTH_RANGE[0]
+            loc_d.append(float(depth))
+        #loc_d = [x/self.DEPTH_SCALE for x in loc_numbers[2::self.num_tokens]]  # depth
         loc_r0 = [x/self.ROT_SCALE for x in loc_numbers[3::self.num_tokens]]  # rotvec[0]
         loc_r1 = [x/self.ROT_SCALE for x in loc_numbers[4::self.num_tokens]]  # rotvec[1]
         loc_r2 = [x/self.ROT_SCALE for x in loc_numbers[5::self.num_tokens]]  # rotvec[2]
@@ -580,11 +615,31 @@ encoder_xyzrotvec_512_inst = TrajectoryEncoder_xyzrotvec_512xy()
 
 class TrajectoryEncoder_xyzrotvec4(TrajectoryEncoder_xyzrotvec2):
     XY_TOKENS = 256  # as in 1024 tokens in total going from 0 to 255
-encoder_xyzrotvec4_inst = TrajectoryEncoder_xyzrotvec4()
+encoder_xyzrotvec_256_inst = TrajectoryEncoder_xyzrotvec4()
 
 class TrajectoryEncoder_xyzrotvec5(TrajectoryEncoder_xyzrotvec2):
     XY_TOKENS = 128  # as in 1024 tokens in total going from 0 to 255
-encoder_xyzrotvec5_inst = TrajectoryEncoder_xyzrotvec5()
+encoder_xyzrotvec_128_inst = TrajectoryEncoder_xyzrotvec5()
+
+class TrajectoryEncoder_xyzrotvec_512xy128d(TrajectoryEncoder_xyzrotvec2):
+    XY_TOKENS = 512  # as in 1024 tokens in total going from 0 to 511
+    DEPTH_SCALE = None
+    DEPTH_RANGE = (.1, 1.0)  # [meters]
+    DEPTH_TOKENS = 128
+    remaining_tokens = 1024 - XY_TOKENS - DEPTH_TOKENS
+    DEPTH_TOKENS_START = XY_TOKENS + (remaining_tokens)//2  # 704
+    DEPTH_TOKENS_END = DEPTH_TOKENS_START + DEPTH_TOKENS # 832
+encoder_xyzrotvec_512xy128d_inst = TrajectoryEncoder_xyzrotvec_512xy128d()
+
+class TrajectoryEncoder_xyzrotvec_512xy256d(TrajectoryEncoder_xyzrotvec2):
+    XY_TOKENS = 512  # as in 1024 tokens in total going from 0 to 511
+    DEPTH_SCALE = None
+    DEPTH_RANGE = (.1, 1.0)  # [meters]
+    DEPTH_TOKENS = 256
+    remaining_tokens = 1024 - XY_TOKENS - DEPTH_TOKENS
+    DEPTH_TOKENS_START = XY_TOKENS + (remaining_tokens)//2  
+    DEPTH_TOKENS_END = DEPTH_TOKENS_START + DEPTH_TOKENS 
+encoder_xyzrotvec_512xy256d_inst = TrajectoryEncoder_xyzrotvec_512xy256d()
 
 
 def getActionEncDecFunction(name):
@@ -601,9 +656,14 @@ def getActionEncInstance(name):
     elif name == "xyzrotvec-cam-512xy":
         return encoder_xyzrotvec_512_inst
     elif name == "xyzrotvec-cam-256xy":
-        return encoder_xyzrotvec4_inst
+        return encoder_xyzrotvec_256_inst
     elif name == "xyzrotvec-cam-128xy":
-        return encoder_xyzrotvec5_inst
+        return encoder_xyzrotvec_128_inst
+    elif name == "xyzrotvec-cam-512xy128d":
+        return encoder_xyzrotvec_512xy128d_inst
+    elif name == "xyzrotvec-cam-512xy256d":
+        return encoder_xyzrotvec_512xy256d_inst
+    
     else:
         raise ValueError(f"unknown encoder name {name}")
 
@@ -675,7 +735,8 @@ def check_encode_decode():
         assert token_str == token_str_cached, f"Token mismatch: {token_str} != {token_str_cached}"
         
     
-    for encoder_name in ("xyzrotvec-cam-1024xy", "xyzrotvec-cam-512xy", "xyzrotvec-cam-256xy", "xyzrotvec-cam-128xy"):
+    for encoder_name in ("xyzrotvec-cam-1024xy", "xyzrotvec-cam-512xy", "xyzrotvec-cam-256xy", "xyzrotvec-cam-128xy",
+                         "xyzrotvec-cam-512xy128d","xyzrotvec-cam-512xy256d"):
         enc = getActionEncInstance(encoder_name)
 
         curve_25d, depth, token_str = enc.encode_trajectory(points_3d, orns_3d, camera, robot_pose=robot_pose)
