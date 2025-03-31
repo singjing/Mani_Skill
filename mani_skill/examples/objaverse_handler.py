@@ -15,7 +15,7 @@ from mani_skill.envs.utils import randomization
 from mani_skill.envs.scene import ManiSkillScene
 
 try:
-    from mani_skill.examples.chatgpt_describer import chatgpt_describer
+    from mani_skill.examples.dataset_creation.chatgpt_describer import chatgpt_describer
 except ImportError:
     print("ChatGPT describer not loaded")
     chatgpt_describer = None
