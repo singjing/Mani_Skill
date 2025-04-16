@@ -189,6 +189,7 @@ def iterate_env(args: Args, vis=True, model=None):
     max_attempts = 10**6
     for i in range(max_attempts):
         reset_random(args, orig_seeds)
+        assert isinstance(args.seed, list)
 
         if i != 0 and i % RESET_HARD == 0:
             del env

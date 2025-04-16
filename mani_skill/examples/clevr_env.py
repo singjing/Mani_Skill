@@ -59,7 +59,7 @@ class StackCubeEnv(BaseEnv):
         self.cam_resample_if_objs_unseen = 100  # unseen as in not in cam fustrum
 
         # cached stuff for loaders
-        self.objects = None
+        self.objects = []
         self.objaverse_model_ids = None
         self.ycb_model_ids = None
         self.spok_dataset = None
@@ -117,9 +117,9 @@ class StackCubeEnv(BaseEnv):
     def _default_human_render_camera_configs(self):
         return self.render_camera_config
         
-    def _load_agent(self, options: dict, initial_agent_poses: Optional[Union[sapien.Pose, Pose]] = sapien.Pose(p=[0.0, 0, 0])):
+    def _load_agent(self, options: dict, initial_agent_poses: Optional[Union[sapien.Pose, Pose]] = sapien.Pose(p=[0.0, 0, 0]), build_separate: bool = False):
         initial_agent_poses=sapien.Pose(p=[0.0, 0, 300])
-        super()._load_agent(options, initial_agent_poses) 
+        super()._load_agent(options, initial_agent_poses, build_separate)
 
     def _load_scene_clevr(self, num_objects, min_unique=2, max_attempts=100):
         # Geometric sahpes, inspired by CLEVR
@@ -129,7 +129,8 @@ class StackCubeEnv(BaseEnv):
         sizes = {"large": 0.7/10./2., "small": 0.35/10./2.}
         # Make sure that there are at least min_unique unique (non-duplicate) objects
         assert max_attempts > 0
-        unique, counts = None, None
+        unique, counts = np.empty((0,), dtype=int), np.empty((0,), dtype=int)  # for pylance
+
         for _ in range(max_attempts):
             shapes_choice = randomization.uniform(0.0, float(len(shapes)), size=(num_objects,)).cpu().numpy().astype(int)
             colors_choice = randomization.uniform(0.0, float(len(colors)), size=(num_objects,)).cpu().numpy().astype(int)
@@ -146,7 +147,7 @@ class StackCubeEnv(BaseEnv):
         # so do this as tuples
         unique_set = set(map(tuple, unique[np.where(counts==1)[0]]))
         self.objects_unique = [tuple(row) in unique_set for row in shape_array]
-
+        assert num_objects >= 1
         self.objects = []
         self.object_names = []
         for i in range(num_objects):
@@ -232,8 +233,6 @@ class StackCubeEnv(BaseEnv):
             # from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
             # print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
         
-        #set_trace()
-
         unique_vals, counts = np.unique(uuids, return_counts=True)
         count_dict = dict(zip(unique_vals, counts))
         self.objects_unique = [count_dict[num] == 1 for num in uuids]
@@ -297,7 +296,7 @@ class StackCubeEnv(BaseEnv):
         grasp_pose = obj_a
         tcp_pose = obj_a
         action_text = "check visibility"
-        action_encoder = getActionEncInstance("xyzrotvec-cam-proj2")
+        action_encoder = getActionEncInstance("xyzrotvec-cam-1024xy")
         enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_a, obj_b,
                                                                 camera, grasp_pose, tcp_pose,
@@ -388,11 +387,13 @@ class StackCubeEnv(BaseEnv):
 
     def set_goal_pose(self, objA_goal_pose):
         # Move cubeA onto cubeB
+        assert self.cubeA is not None
         self.objA_goal_pose = objA_goal_pose
         self.objA_to_goal_dist_inital = torch.linalg.norm(self.cubeA.pose.p - objA_goal_pose.p, axis=1)
 
     # For the old rewards see: ../mani_skill/envs/tasks/tabletop/stack_cube.py
     def eval_reward(self):
+        assert self.cubeA is not None
         objA_pose = self.cubeA.pose.p
         objA_to_goal_dist = torch.linalg.norm(objA_pose - self.objA_goal_pose.p, axis=1)
         reward = torch.clamp(1 - objA_to_goal_dist / self.objA_to_goal_dist_inital, 0, 1)
@@ -404,6 +405,7 @@ class StackCubeEnv(BaseEnv):
         return self.eval_reward()
 
     def _get_obs_extra(self, info: Dict):
+        assert self.agent is not None
         tcp_pose = self.agent.tcp.pose
         robot_pose = self.agent.robot.get_root_pose()
         obs = dict(obj_start=self.obj_start.raw_pose, obj_end=self.obj_end.raw_pose,
