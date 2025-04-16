@@ -333,7 +333,7 @@ class StackCubeEnv(BaseEnv):
                 else:
                     # Random global shift
                     xy = torch.rand((b, 2)) * 0.2 - 0.1 # rand is uniform [0,1], so shift to [-0.1, 0.1]
-                    shape_xy = xy + sampler.sample(radius, max_trials=100, verbose=False)
+                    shape_xy = xy + sampler.sample(radius, max_trials=10000, verbose=False)
                     xyz[:, :2] = shape_xy
 
                     table = self.scene.actors['table-workspace']

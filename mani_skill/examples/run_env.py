@@ -7,6 +7,8 @@ Option 2: record trajectories (e.g. with rt shader)
 python run_env.py --record_dir /tmp/cvla-test --N_samples=10
 
 CUDA_VISIBLE_DEVICES=0 python run_env.py --record_dir /tmp/cvla-clevr-8 --N_samples=150000
+CUDA_VISIBLE_DEVICES=1 python run_env.py -od objaverse --record_dir /tmp/cvla-obja-8 --N_samples=150000
+
 """
 import gymnasium as gym
 import numpy as np
@@ -28,17 +30,10 @@ from mani_skill.utils.wrappers import RecordEpisode
 from mani_skill.utils.structs import Pose
         
 import mani_skill.examples.clevr_env  # do import to register env, not used otherwise
-<<<<<<< HEAD
-from mani_skill.examples.utils_trajectory import generate_curve_torch
-from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
-from mani_skill.examples.utils_traj_tokens import getActionEncInstance
-from mani_skill.examples.utils_trajectory import DummyCamera
-=======
 from cvla.utils_trajectory import generate_curve_torch
 from cvla.utils_traj_tokens import to_prefix_suffix
 from cvla.utils_traj_tokens import getActionEncInstance
 from cvla.utils_trajectory import DummyCamera
->>>>>>> 6015841 (increase camera randomization, fix object placement)
 
 from pdb import set_trace
 import multiprocessing
@@ -102,7 +97,7 @@ class Args:
     run_mode: Annotated[Optional[str], tyro.conf.arg(aliases=["-m"])] = "script"
     """Run a script|interactive|first. first renders first frame only"""
 
-    action_encoder: Annotated[Optional[str], tyro.conf.arg(aliases=["-ae"])] = "xyzrotvec-cam-proj2"
+    action_encoder: Annotated[Optional[str], tyro.conf.arg(aliases=["-ae"])] = "xyzrotvec-cam-1024xy"
     """Action encoding"""
 
     object_dataset: Annotated[Optional[str], tyro.conf.arg(aliases=["-od"])] = "clevr"
@@ -127,7 +122,7 @@ def reset_random(args, orig_seeds):
     np.random.seed(seed)
 
     
-def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
+def iterate_env(args: Args, vis=True, model=None):
     np.set_printoptions(suppress=True, precision=3)
     verbose = not args.quiet
     parallel_in_single_scene = args.render_mode == "human"
@@ -167,6 +162,10 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
     
     env = make_env()
 
+    filter_visible = True
+    action_encoder = getActionEncInstance(args.action_encoder)
+    enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
+
     if verbose:
         print("Observation space", env.observation_space)
         print("Action space", env.action_space)
@@ -176,21 +175,25 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
         print("Obs mode", args.obs_mode)
 
     filter_visible = True
-<<<<<<< HEAD
     action_encoder = getActionEncInstance(args.action_encoder)
     enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
-=======
 
     action_encoder = getActionEncInstance(args.action_encoder)
     enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
 
->>>>>>> 6015841 (increase camera randomization, fix object placement)
     print("filter visible objects", filter_visible)
     print("action encoder", args.action_encoder)
 
     orig_seeds = args.seed
-    for i in range(max_iter+1):
+    N_valid_samples = 0
+    max_attempts = 10**6
+    for i in range(max_attempts):
         reset_random(args, orig_seeds)
+
+        if i != 0 and i % RESET_HARD == 0:
+            del env
+            env = make_env()
+
         try:
             obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         except Exception as e:  # Catch all exceptions, including AssertionError
@@ -259,11 +262,7 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             if x.startswith("action_text_"):
                 action_text = str(x).replace("action_text_", "")
         assert action_text is not None
-<<<<<<< HEAD
 
-=======
-        
->>>>>>> 6015841 (increase camera randomization, fix object placement)
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                       camera, grasp_pose, tcp_pose,
                                                                       action_text, enc_func, robot_pose=robot_pose)
@@ -290,10 +289,6 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             curve_3d_est, orns_3d_est = dec_func(token_str, camera, robot_pose=robot_pose)
             curve_3d = curve_3d_est  # set the unparsed trajectory one used for policy
             orns_3d = orns_3d_est
-<<<<<<< HEAD
-=======
-            #enc_func, dec_func = getActionEncDecFunction(args.action_encoder)
->>>>>>> 6015841 (increase camera randomization, fix object placement)
 
         # Evaluate the trajectory
         if args.run_mode == "script" or model:
@@ -303,18 +298,11 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
                 
             if model:
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
-<<<<<<< HEAD
-                json_dict["prediction"] = token_pred
+                json_dict["prediction"] = token_pred # TODO(jelena): add [0] here?
                 if token_pred == "" or token_pred is None:
                     print("No prediction, skipping")
                     continue
                 curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera=camera, robot_pose=robot_pose)
-=======
-                print("XXXXX", token_pred)
-                json_dict["prediction"] = token_pred[0]
-                # TODO(max): move token_pred[0] fix to the model class
-                curve_3d_pred, orns_3d_pred = dec_func(token_pred[0], camera=camera, robot_pose=robot_pose)
->>>>>>> 6015841 (increase camera randomization, fix object placement)
                 curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
                 orns_3d = orns_3d_pred
 
@@ -375,10 +363,7 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
                     env.flush_trajectory(save=True, ignore_empty_transition=False)
                 else:
                     env.flush_trajectory(save=False)
-                    if i % RESET_HARD == 0:
-                        del env
-                        env = make_env()
-                    continue  # sample was not valid, continue after check
+                    continue  # sample was not valid
             else:
                 env.flush_trajectory(save=True, ignore_empty_transition=False)
 
@@ -388,10 +373,8 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
 
         yield image_before, json_dict, args.seed[0]
 
-        if i % RESET_HARD == 0:
-            del env
-            env = make_env()
-
+        N_valid_samples += 1
+        
     env.close()
 
 
@@ -492,5 +475,9 @@ if __name__ == "__main__":
         #asyncio.run(save_multiproces(parsed_args, N_samples))
         N_processes = 1
         if parsed_args.N_samples > 100:
-            N_processes = 10
+            if parsed_args.object_dataset == "clevr":
+                N_processes = 10
+            else:
+                N_processes = 5
+            
         save_multiproces(parsed_args, parsed_args.N_samples, N_processes=N_processes)
