@@ -702,6 +702,13 @@ class RecordEpisode(gym.Wrapper):
                         dtype=np.float32,
                     )
 
+                # Add obersvation per scene
+                if hasattr(self.env.unwrapped, 'get_obs_scene') and callable(self.env.unwrapped.get_obs_scene):
+                    import json
+                    obs_scene = self.env.unwrapped.get_obs_scene()
+                    obs_scene_str = str(json.dumps(obs_scene))
+                    group.create_dataset('obs_scene', data=np.string_(obs_scene_str))
+
                 self._json_data["episodes"].append(common.to_numpy(episode_info))
                 dump_json(self._json_path, self._json_data, indent=2)
                 if verbose:
