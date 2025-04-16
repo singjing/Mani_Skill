@@ -30,8 +30,8 @@ from mani_skill.utils.structs import Pose
 import mani_skill.examples.clevr_env  # do import to register env, not used otherwise
 from mani_skill.examples.utils_trajectory import generate_curve_torch
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
-from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
-from utils_trajectory import DummyCamera
+from mani_skill.examples.utils_traj_tokens import getActionEncInstance
+from mani_skill.examples.utils_trajectory import DummyCamera
 
 from pdb import set_trace
 import multiprocessing
@@ -165,7 +165,8 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
         print("Obs mode", args.obs_mode)
 
     filter_visible = True
-    enc_func, dec_func = getActionEncDecFunction(args.action_encoder)
+    action_encoder = getActionEncInstance(args.action_encoder)
+    enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
     print("filter visible objects", filter_visible)
     print("action encoder", args.action_encoder)
 
@@ -241,7 +242,6 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
                 action_text = str(x).replace("action_text_", "")
         assert action_text is not None
 
-        #enc_func, dec_func = getEncDecFunc("xyzrotvec-rbt")
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                       camera, grasp_pose, tcp_pose,
                                                                       action_text, enc_func, robot_pose=robot_pose)
@@ -259,14 +259,15 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
                          tcp_start_pose=tcp_pose.raw_pose.detach().numpy().tolist(),
                          grasp_pose=grasp_pose.raw_pose.detach().numpy().tolist(),
                          info=info,
-                         seed=args.seed[0])
+                         seed=args.seed[0],
+                         iter_reached=i,
+                         )
         
         encode_decode_trajectory = True
         if encode_decode_trajectory:
             curve_3d_est, orns_3d_est = dec_func(token_str, camera, robot_pose=robot_pose)
             curve_3d = curve_3d_est  # set the unparsed trajectory one used for policy
             orns_3d = orns_3d_est
-            enc_func, dec_func = getActionEncDecFunction(args.action_encoder)
 
         # Evaluate the trajectory
         if args.run_mode == "script" or model:
@@ -277,6 +278,9 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             if model:
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
                 json_dict["prediction"] = token_pred
+                if token_pred == "" or token_pred is None:
+                    print("No prediction, skipping")
+                    continue
                 curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera=camera, robot_pose=robot_pose)
                 curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
                 orns_3d = orns_3d_pred
