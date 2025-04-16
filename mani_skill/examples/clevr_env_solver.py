@@ -1,9 +1,7 @@
 # see examples/motionplanning/panda/solutions/stack_cube.py for the template of this
-import argparse
 import gymnasium as gym
 import numpy as np
 import sapien
-from transforms3d.euler import euler2quat
 
 from mani_skill.envs.tasks import StackCubeEnv
 from mani_skill.examples.motionplanning.panda.motionplanner import \
@@ -12,8 +10,8 @@ from mani_skill.examples.motionplanning.panda.utils import (
     compute_grasp_info_by_obb, get_actor_obb)
 from scipy.spatial.transform import Rotation as R
 
-def object_is_rotationally_invariant(obj):
-    if obj.name.startswith("sphere"):
+def object_is_rotationally_invariant(env, obj):
+    if env.object_dataset == "clevr" and "sphere" in obj.name:
         return True
     return False
 
@@ -24,10 +22,7 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
     approaching = np.array([0, 0, -1])
     target_closing = env.agent.tcp.pose.to_transformation_matrix()[0, :3, 1].numpy()
 
-    if env.cubeB.name.startswith("clevr"):
-        compute_grasp_info_by_obb_func = compute_grasp_info_by_obb_clevr
-    else:
-        compute_grasp_info_by_obb_func = compute_grasp_info_by_obb
+    compute_grasp_info_by_obb_func = compute_grasp_info_by_obb
 
     grasp_info = compute_grasp_info_by_obb_func(
         obb,
@@ -35,21 +30,14 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
         target_closing=target_closing,
         depth=FINGER_LENGTH,
     )
+
     closing, center = grasp_info["closing"], grasp_info["center"]
     # this builds a grasp, which has position of center
     grasp_pose = env.agent.build_grasp_pose(approaching, closing, center)
 
-    if object_is_rotationally_invariant(env.cubeA):
-        # TODO(max): this is bad and can cause problems, only consider z-axis
-        # keep this simple for now
+    # TODO(max): this is very simplified, only considers z-axis, only works for clevr
+    if object_is_rotationally_invariant(env, env.cubeA):
         grasp_pose.set_q(env.agent.tcp.pose.get_q()[0])
-        #rot_initial = R.from_quat(env.agent.tcp.pose.get_q()[0].numpy(), scalar_first=True)
-        #rot_initial_z = rot_initial.as_euler('xyz', degrees=True)[2]
-        #rot_grasp = R.from_quat(grasp_pose.get_q(), scalar_first=True)
-        #rot_grasp_xy = rot_grasp.as_euler('xyz', degrees=True)[:2].tolist()
-        #rot_grasp_new = R.from_euler('xyz', rot_grasp_xy + [rot_initial_z], degrees=True) 
-        #json_dict['traj_q'][0] = rot_grasp_new.as_quat(scalar_first=True).tolist()  # json serializable
-
 
     # Search a valid pose
     # angles = np.arange(0, np.pi * 2 / 3, np.pi / 2)
@@ -65,88 +53,7 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
     #     break
     # else:
     #     print("Fail to find a valid grasp pose")
-
-    #print(env.cube_half_size[2]*2, obb.primitive.extents[2]/2)
-
-    #from pdb import set_trace
-    #set_trace()
     return grasp_pose, obb
-
-from mani_skill.utils import common
-import trimesh
-def compute_grasp_info_by_obb_clevr(
-    obb: trimesh.primitives.Box,
-    approaching=(0, 0, -1),
-    target_closing=None,
-    depth=0.0,
-    ortho=True,
-):
-    """Compute grasp info given an oriented bounding box.
-    The grasp info includes axes to define grasp frame, namely approaching, closing, orthogonal directions and center.
-
-    Args:
-        obb: oriented bounding box to grasp
-        approaching: direction to approach the object
-        target_closing: target closing direction, used to select one of multiple solutions
-        depth: displacement from hand to tcp along the approaching vector. Usually finger length.
-        ortho: whether to orthogonalize closing  w.r.t. approaching.
-    """
-    # NOTE(jigu): DO NOT USE `x.extents`, which is inconsistent with `x.primitive.transform`!
-    extents = np.array(obb.primitive.extents)
-    T = np.array(obb.primitive.transform)
-
-    # Assume normalized
-    approaching = np.array(approaching)
-
-    # Find the axis closest to approaching vector
-    angles = approaching @ T[:3, :3]  # [3]
-    inds0 = np.argsort(np.abs(angles))
-    ind0 = inds0[-1]
-
-    # Find the shorter axis as closing vector
-    inds1 = np.argsort(extents[inds0[0:-1]])
-    ind1 = inds0[0:-1][inds1[0]]
-    ind2 = inds0[0:-1][inds1[1]]
-
-    # If sizes are close, choose the one closest to the target closing
-    if target_closing is not None and 0.99 < (extents[ind1] / extents[ind2]) < 1.01:
-        vec1 = T[:3, ind1]
-        vec2 = T[:3, ind2]
-        if np.abs(target_closing @ vec1) < np.abs(target_closing @ vec2):
-            ind1 = inds0[0:-1][inds1[1]]
-            ind2 = inds0[0:-1][inds1[0]]
-    closing = T[:3, ind1]
-
-    # Flip if far from target
-    if target_closing is not None and target_closing @ closing < 0:
-        closing = -closing
-
-    # Reorder extents
-    extents = extents[[ind0, ind1, ind2]]
-
-    # Find the origin on the surface
-    center = T[:3, 3].copy()
-    half_size = extents[0] * 0.5
-
-    # This was hte old code, didn't work with long unsymetric shapes
-    #center = center + approaching * (-half_size + min(depth, half_size))
-
-    if depth < half_size: # if extents is long, subtract grasp depth from extent
-        center = center + (-1)*approaching *(extents[0] - depth)
-    else:  # if extents is short, just grasp in the middle
-        center = center + (-1)*approaching *(half_size)
-
-    if ortho:
-        closing = closing - (approaching @ closing) * approaching
-        closing = common.np_normalize_vector(closing)
-
-    grasp_info = dict(
-        approaching=approaching, closing=closing, center=center, extents=extents
-    )
-    return grasp_info
-
-
-
 
 
 def solve(env: StackCubeEnv, seed=None, debug=False, vis=False, dry_run=False):

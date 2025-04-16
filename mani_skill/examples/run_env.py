@@ -6,12 +6,12 @@ python run_env.py -od objaverse
 Option 2: record trajectories (e.g. with rt shader)
 python run_env.py --record_dir /tmp/cvla-test --N_samples=10
 
+CUDA_VISIBLE_DEVICES=0 python run_env.py --record_dir /tmp/cvla-clevr-8 --N_samples=150000
 """
 import gymnasium as gym
 import numpy as np
 import random
 import sapien
-import matplotlib.pyplot as plt
 import os
 import json
 from pathlib import Path
@@ -28,10 +28,17 @@ from mani_skill.utils.wrappers import RecordEpisode
 from mani_skill.utils.structs import Pose
         
 import mani_skill.examples.clevr_env  # do import to register env, not used otherwise
+<<<<<<< HEAD
 from mani_skill.examples.utils_trajectory import generate_curve_torch
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
 from mani_skill.examples.utils_traj_tokens import getActionEncInstance
 from mani_skill.examples.utils_trajectory import DummyCamera
+=======
+from cvla.utils_trajectory import generate_curve_torch
+from cvla.utils_traj_tokens import to_prefix_suffix
+from cvla.utils_traj_tokens import getActionEncInstance
+from cvla.utils_trajectory import DummyCamera
+>>>>>>> 6015841 (increase camera randomization, fix object placement)
 
 from pdb import set_trace
 import multiprocessing
@@ -101,6 +108,9 @@ class Args:
     object_dataset: Annotated[Optional[str], tyro.conf.arg(aliases=["-od"])] = "clevr"
     """Dataset from which we sample objects"""
 
+    camera_views: Annotated[Optional[str], tyro.conf.arg(aliases=["-cv"])] = "random"
+    """Dataset from which we sample objects"""
+
     N_samples: Annotated[Optional[int], tyro.conf.arg(aliases=["-N"])] = 50
     """Number of samples"""
 
@@ -127,6 +137,7 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
     if args.render_mode == "human" and args.num_envs == 1:
         parallel_in_single_scene = False
 
+    # define make env as a function to enable hard resets
     def make_env():
         env = gym.make(
             args.env_id,
@@ -143,10 +154,10 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             robot_uids="panda",  #fetch, panda_wristcam
             scene_dataset="Table", # Table, ProcTHOR
             object_dataset=args.object_dataset, # clevr, ycb, objaverse
+            camera_views=args.camera_views
             #camera_cfgs={"use_stereo_depth": True, },
             # **args.env_kwargs
         )
-
         if args.record_dir:
             env = RecordEpisode(env, args.record_dir, info_on_video=False, 
                                 save_trajectory=True, max_steps_per_video=env._max_episode_steps,
@@ -165,13 +176,20 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
         print("Obs mode", args.obs_mode)
 
     filter_visible = True
+<<<<<<< HEAD
     action_encoder = getActionEncInstance(args.action_encoder)
     enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
+=======
+
+    action_encoder = getActionEncInstance(args.action_encoder)
+    enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
+
+>>>>>>> 6015841 (increase camera randomization, fix object placement)
     print("filter visible objects", filter_visible)
     print("action encoder", args.action_encoder)
 
     orig_seeds = args.seed
-    for i in range(max_iter):
+    for i in range(max_iter+1):
         reset_random(args, orig_seeds)
         try:
             obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
@@ -241,7 +259,11 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             if x.startswith("action_text_"):
                 action_text = str(x).replace("action_text_", "")
         assert action_text is not None
+<<<<<<< HEAD
 
+=======
+        
+>>>>>>> 6015841 (increase camera randomization, fix object placement)
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                       camera, grasp_pose, tcp_pose,
                                                                       action_text, enc_func, robot_pose=robot_pose)
@@ -268,6 +290,10 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             curve_3d_est, orns_3d_est = dec_func(token_str, camera, robot_pose=robot_pose)
             curve_3d = curve_3d_est  # set the unparsed trajectory one used for policy
             orns_3d = orns_3d_est
+<<<<<<< HEAD
+=======
+            #enc_func, dec_func = getActionEncDecFunction(args.action_encoder)
+>>>>>>> 6015841 (increase camera randomization, fix object placement)
 
         # Evaluate the trajectory
         if args.run_mode == "script" or model:
@@ -277,11 +303,18 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
                 
             if model:
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
+<<<<<<< HEAD
                 json_dict["prediction"] = token_pred
                 if token_pred == "" or token_pred is None:
                     print("No prediction, skipping")
                     continue
                 curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera=camera, robot_pose=robot_pose)
+=======
+                print("XXXXX", token_pred)
+                json_dict["prediction"] = token_pred[0]
+                # TODO(max): move token_pred[0] fix to the model class
+                curve_3d_pred, orns_3d_pred = dec_func(token_pred[0], camera=camera, robot_pose=robot_pose)
+>>>>>>> 6015841 (increase camera randomization, fix object placement)
                 curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
                 orns_3d = orns_3d_pred
 
@@ -329,17 +362,26 @@ def iterate_env(args: Args, vis=True, model=None, max_iter=10**6):
             raise ValueError
 
         if args.record_dir:
-            try:
-                seg = env._trajectory_buffer.observation['sensor_data']['render_camera']['segmentation']
-                if seg.max() <= 255:
-                    seg = seg.astype(np.uint8)
-                env._trajectory_buffer.observation['sensor_data']['render_camera']['segmentation'] = seg
-            except KeyError:
-                pass
+            from mani_skill.examples.utils_record import downcast_seg_array, apply_check_object_pixels
+            downcast_seg_array(env)
+            are_vis = apply_check_object_pixels(env, N_percent=0.25)
 
             #if i % SAVE_FREQ == 0:
             # keep the transition from reset (which does not have an action)
-            env.flush_trajectory(save=True, ignore_empty_transition=False)
+
+            record_visible = True
+            if record_visible:
+                if are_vis:
+                    env.flush_trajectory(save=True, ignore_empty_transition=False)
+                else:
+                    env.flush_trajectory(save=False)
+                    if i % RESET_HARD == 0:
+                        del env
+                        env = make_env()
+                    continue  # sample was not valid, continue after check
+            else:
+                env.flush_trajectory(save=True, ignore_empty_transition=False)
+
             if SAVE_VIDEO:
                 video_name =  f"CLEVR_{str(args.seed[0]).zfill(10)}"
                 env.flush_video(name=video_name, save=True)
@@ -364,17 +406,6 @@ def run_interactive(env):
         print("\nCtrl+C detected, continuing.")
 
 
-# import asyncio
-# async def async_run_iteration(parsed_args, N_samples, process_num=None):
-#     """Runs the environment iteration asynchronously."""
-#     desc = "Processing Iterations"
-#     if process_num is not None:
-#         desc += f"-{process_num}"
-#     env_iter = iterate_env(parsed_args, vis=False, max_iter=N_samples)
-#     loop = asyncio.get_running_loop()
-#     for _ in tqdm(range(N_samples), desc=desc):
-#         await loop.run_in_executor(None, lambda: next(env_iter))
-
 def run_iteration(parsed_args, N_samples, process_num=None, progress_bar=None):
     """Runs the environment iteration in a separate process."""
     env_iter = iterate_env(parsed_args, vis=False)
@@ -384,21 +415,30 @@ def run_iteration(parsed_args, N_samples, process_num=None, progress_bar=None):
             progress_bar.value += 1
 
 def save_multiproces(parsed_args, N_samples, N_processes=10):
+        from utils_record import check_no_uncommitted_changes, get_git_commit_hash
         parsed_args.run_mode = "first"
-        dataset_path = parsed_args.record_dir
+        dataset_path = Path(parsed_args.record_dir)
+        os.makedirs(dataset_path, exist_ok=True)
 
-        # be very careful here, because we copy seeds between processes
+        # save command line arguments in nice format
+        if N_samples  > 100:
+            check_no_uncommitted_changes()
+        commit_hash = get_git_commit_hash()
+        with open(dataset_path / "args.txt", "w") as f:
+            f.write(f"git_commit: {commit_hash}\n")
+            for arg in vars(parsed_args):
+                f.write(f"{arg}: {getattr(parsed_args, arg)}\n")
+
+        # set random seeds, be careful to not copy same seeds between processes
         if N_processes > 1:
             assert parsed_args.seed == None
-
         if isinstance(parsed_args.seed, int):
             assert N_processes == 1
             rng = np.random.default_rng(parsed_args.seed)
             parsed_args.seed = rng.integers(0, RAND_MAX, N_samples).tolist()
         
+        # don't multiprocess
         if N_processes == 1:
-            dataset_path = Path(dataset_path)
-            os.makedirs(dataset_path, exist_ok=True)
             # don't set N_samples in iterate_env, so that e.g. re-generate can work for visibility
             env_iter = iterate_env(parsed_args, vis=False)  
             for _ in tqdm(range(N_samples)):
@@ -408,19 +448,18 @@ def save_multiproces(parsed_args, N_samples, N_processes=10):
                     break 
         else:
             samples_per_process = N_samples // N_processes
-            tasks = []
-            
             progress_bar = multiprocessing.Value("i", 0)  
+            
+            tasks = []
             for p_num in range(N_processes):
                 dataset_path_p = Path(dataset_path) / f"p{p_num}"
                 os.makedirs(dataset_path_p, exist_ok=True)
                 args_copy = deepcopy(parsed_args)
                 args_copy.record_dir = dataset_path_p
-                #tasks.append(async_run_iteration(args_copy, N_samples=samples_per_process, process_num=p_num))
                 p = multiprocessing.Process(target=run_iteration, args=(args_copy, samples_per_process, p_num, progress_bar), name=f"Worker-{p_num+1}")
                 tasks.append(p)
                 p.start()
-                time.sleep(1.1)
+                time.sleep(1.1)  # Give some time for processes to start
 
             # Display tqdm progress in the main process
             with tqdm(total=N_samples, desc="Total Progress", position=0, leave=True) as pbar:
@@ -445,7 +484,7 @@ if __name__ == "__main__":
             seeds = json.load(f_obj)
             parsed_args.seed = seeds
 
-    if dataset_path is None:
+    if dataset_path is None:  # Normal run
         env_iter = iterate_env(parsed_args, vis=True)
         while True:
             _ = next(env_iter)
@@ -453,18 +492,5 @@ if __name__ == "__main__":
         #asyncio.run(save_multiproces(parsed_args, N_samples))
         N_processes = 1
         if parsed_args.N_samples > 100:
-            N_processes = 5
+            N_processes = 10
         save_multiproces(parsed_args, parsed_args.N_samples, N_processes=N_processes)
-
-        # N_samples = parsed_args.N_samples
-        # parsed_args.run_mode = "first"
-        # if isinstance(parsed_args.seed, int):
-        #     rng = np.random.default_rng(parsed_args.seed)
-        #     parsed_args.seed = rng.integers(0, RAND_MAX, N_samples).tolist()
-        # dataset_path = Path(dataset_path)
-        # os.makedirs(dataset_path, exist_ok=True)
-        # env_iter = iterate_env(parsed_args, vis=False, max_iter=N_samples)
-        # for _ in tqdm(range(N_samples)):
-        #     _ = next(env_iter)
-        # # save_dataset(iterate_env(parsed_args, vis=False, max_iter=N_samples), N=int(N_samples), dataset_path=dataset_path)
-        

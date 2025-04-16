@@ -21,8 +21,7 @@ from mani_skill.utils.scene_builder.ai2thor import ProcTHORSceneBuilder
 from mani_skill.utils.structs.pose import Pose
 from mani_skill.utils.io_utils import load_json
 from mani_skill.examples.utils_env_interventions import move_object_onto
-from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
-from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
+from mani_skill.examples.utils_traj_tokens import to_prefix_suffix, getActionEncInstance
 from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
 
 
@@ -33,12 +32,13 @@ class StackCubeEnv(BaseEnv):
     SUPPORTED_ROBOTS = ["panda_wristcam", "panda", "fetch"]
     SUPPORTED_OBJECT_DATASETS = ["clevr", "ycb", "objaverse"]
     SUPPORTED_SCENE_DATASETS = ['Table', 'ProcTHOR']
+    SUPPORTED_CAM_VIEWS = ['fixed', 'random_side', 'random']
     agent: Union[Panda, Fetch]
 
 
-
     def __init__(
-        self, *args, robot_uids="panda_wristcam", scene_dataset="Table", object_dataset="clevr", robot_init_qpos_noise=0.02, **kwargs
+        self, *args, robot_uids="panda_wristcam", scene_dataset="Table", object_dataset="clevr",
+        camera_views="random", robot_init_qpos_noise=0.02, **kwargs
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.scene_dataset = scene_dataset
@@ -55,8 +55,8 @@ class StackCubeEnv(BaseEnv):
         #self.cam_size = 224
         self.cam_size = 448
 
-        self.RANDOMIZE_VIEW = True
-        self.RESAMPLE_CAMERA_IF_OBJS_UNSEEN = 100
+        self.camera_views = camera_views
+        self.cam_resample_if_objs_unseen = 100  # unseen as in not in cam fustrum
 
         # cached stuff for loaders
         self.objects = None
@@ -64,7 +64,7 @@ class StackCubeEnv(BaseEnv):
         self.ycb_model_ids = None
         self.spok_dataset = None
 
-        self.initalize_render_camera_fixed()  # sets render_camera_config
+        self.initalize_render_camera()  # sets render_camera_config
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
     def base_camera_pose(self):
@@ -76,20 +76,27 @@ class StackCubeEnv(BaseEnv):
         pose = sapien_utils.look_at(new_p, end_p)
         return pose
         
-    def initalize_render_camera_fixed(self):
-        start_p = [0.6, 0.7, 0.6]
-        end_p = [0.0, 0.0, 0.12]
-        t = 0.5
-        new_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
-        pose = sapien_utils.look_at(new_p, end_p)
-        self.render_camera_config = CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
-        #self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+    def initalize_render_camera(self):
+        if self.camera_views == "fixed":
+            start_p = [0.6, 0.7, 0.6]
+            end_p = [0.0, 0.0, 0.12]
+            t = 0.5
+            new_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
+            pose = sapien_utils.look_at(new_p, end_p)
+            self.render_camera_config = CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+            #self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+            return
+        
+        elif self.camera_views == "random_side":
+            cylinder_l = np.array([.35, -np.pi*4/5, .26])
+            cylinder_h = np.array([.55,  np.pi*4/5, .46])
 
-    def initalize_render_camera_random(self):
-        cylinder_c = np.array([.45, 0, .36])
-        cylinder_ext = np.array([.10, np.pi*4/5, .10])
-        cylinder_l = cylinder_c - cylinder_ext
-        cylinder_h = cylinder_c + cylinder_ext
+        elif self.camera_views == "random":
+            cylinder_l = np.array([.0, -np.pi, .25])
+            cylinder_h = np.array([.50,  np.pi, .65])
+        else:
+            raise ValueError(f"unknown camera_views {self.camera_views}, options {self.SUPPORTED_CAM_VIEWS}")
+        
         r, phi, z = randomization.uniform(cylinder_l, cylinder_h, size=(3,)).cpu().numpy().astype(float)
         start_p = [r * np.cos(phi), r * np.sin(phi), z]
         end_p = randomization.uniform(*zip(*self.object_region),size=(3,)).cpu().numpy().astype(float)
@@ -111,6 +118,7 @@ class StackCubeEnv(BaseEnv):
         return self.render_camera_config
         
     def _load_agent(self, options: dict, initial_agent_poses: Optional[Union[sapien.Pose, Pose]] = sapien.Pose(p=[0.0, 0, 0])):
+        initial_agent_poses=sapien.Pose(p=[0.0, 0, 300])
         super()._load_agent(options, initial_agent_poses) 
 
     def _load_scene_clevr(self, num_objects, min_unique=2, max_attempts=100):
@@ -123,10 +131,10 @@ class StackCubeEnv(BaseEnv):
         assert max_attempts > 0
         unique, counts = None, None
         for _ in range(max_attempts):
-            shapes_choice = randomization.uniform(0.0, float(len(shapes)),size=(num_objects,)).cpu().numpy().astype(int)
-            colors_choice = randomization.uniform(0.0, float(len(colors)),size=(num_objects,)).cpu().numpy().astype(int)
-            sizes_choice = randomization.uniform(0.0, float(len(sizes)),size=(num_objects,)).cpu().numpy().astype(int)
-            upright_choice = randomization.uniform(0.0, float(2),size=(num_objects,)).cpu().numpy().astype(int)
+            shapes_choice = randomization.uniform(0.0, float(len(shapes)), size=(num_objects,)).cpu().numpy().astype(int)
+            colors_choice = randomization.uniform(0.0, float(len(colors)), size=(num_objects,)).cpu().numpy().astype(int)
+            sizes_choice = randomization.uniform(0.0, float(len(sizes)), size=(num_objects,)).cpu().numpy().astype(int)
+            upright_choice = randomization.uniform(0.0, float(2), size=(num_objects,)).cpu().numpy().astype(int)
             shape_array = np.array((shapes_choice, colors_choice, sizes_choice)).T
             unique, counts = np.unique(shape_array, axis=0, return_counts=True)
             if np.sum(counts==1) >= min_unique:
@@ -140,28 +148,28 @@ class StackCubeEnv(BaseEnv):
         self.objects_unique = [tuple(row) in unique_set for row in shape_array]
 
         self.objects = []
-        self.objects_descr = []
+        self.object_names = []
         for i in range(num_objects):
             shape_name, build_function = list(shapes.items())[shapes_choice[i]]
             color_name, color = list(colors.items())[colors_choice[i]]
             size_name, size = list(sizes.items())[sizes_choice[i]]
             color = list(np.array(color + [255.,])/255.)
             initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
-            name = f"clevr_{shape_name}_{i}"
+            #name = f"clevr_{shape_name}_{i}"
+            object_name = f'{size_name}_{color_name}_{shape_name}_{i}'.strip()
             if shape_name == "box":
                 if upright_choice[i] == 0:
                     half_extents = (2*size, size, size)
                 else:
                     half_extents = (size, size, 2*size)
-                tmp = build_function(self.scene, half_extents, color=color, name=name, initial_pose=initial_pose)
+                tmp = build_function(self.scene, half_extents, color=color, name=object_name, initial_pose=initial_pose)
             else:
-                tmp = build_function(self.scene, size, color=color, name=name, initial_pose=initial_pose)
+                tmp = build_function(self.scene, size, color=color, name=object_name, initial_pose=initial_pose)
             self.objects.append(tmp)
+
             # now do text description
-            descr = dict(shape=shape_name,
-                         size=size_name, 
-                         color=color_name)
-            self.objects_descr.append(descr)
+            object_name_nice = f'{size_name} {color_name} {shape_name}'
+            self.object_names.append(object_name_nice)
     
     def _load_scene_ycb(self, num_objects):
         if self.ycb_model_ids is None:
@@ -185,7 +193,7 @@ class StackCubeEnv(BaseEnv):
             #builder.set_scene_idxs([i])
             model_name = " ".join(str(model_id).split("_")[1:])
             self.objects.append(builder.build(name=f"{model_id}-{i}"))
-            self.objects_descr.append(dict(size="", color="", shape=model_name))
+            self.object_names.append(model_name)
 
         # save if objects are unique
         unique_vals, counts = np.unique(model_ids, return_counts=True)
@@ -219,7 +227,7 @@ class StackCubeEnv(BaseEnv):
                     print(f"Exception {e =}")
 
             self.objects.append(obj_builder.build(name=f"{model_name}"))
-            self.objects_descr.append(dict(size="", color="", shape=shape_name))
+            self.object_names.append(shape_name)
 
             # from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
             # print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
@@ -234,17 +242,17 @@ class StackCubeEnv(BaseEnv):
         if self.scene_dataset == "Table":
             self.table_scene = TableSceneBuilder(env=self, robot_init_qpos_noise=self.robot_init_qpos_noise)
             self.table_scene.build()
+
         elif self.scene_dataset == "ProcTHOR":
             self.table_scene = ProcTHORSceneBuilder(env=self, robot_init_qpos_noise=self.robot_init_qpos_noise)
             self.table_scene.build(build_config_idxs=0)
-
             ref_item = self.table_scene.scene_objects["env-0_objects/Toaster_6_2"]
             ref_pose = dict(self.table_scene._default_scene_objects_poses)[ref_item]
             region_pos = ref_pose.get_p()
             print("ref pose", region_pos)
             extents = [.1, .1, 0]
             region = [region_pos + extents, region_pos - extents]
-            self.object_region = np.array(region).T.tolist()
+            self.object_region = np.array(region).T
             ref_item.remove_from_scene()
 
             # add lighting
@@ -260,10 +268,10 @@ class StackCubeEnv(BaseEnv):
         num_objects = int(randomization.uniform(float(min_objects), float(max_objects+1), size=(1,)))
         
         # Turn off gravity
-        self.scene.sim_config.scene_config.gravity = np.array([0,0,0])
+        self.scene.sim_config.scene_config.gravity = np.array([0, 0, 0])
         
         self.objects = []
-        self.objects_descr = []
+        self.object_names = []
         if self.object_dataset == "clevr":
             self._load_scene_clevr(num_objects)
         elif self.object_dataset == "ycb":
@@ -274,10 +282,11 @@ class StackCubeEnv(BaseEnv):
             raise ValueError
         
         assert len(self.objects) == num_objects, f"Expected {num_objects} objects, got {len(self.objects)}"
-        assert len(self.objects_descr) == num_objects, f"Expected {num_objects} objects, got {len(self.objects_descr)}"
+        assert len(self.object_names) == num_objects, f"Expected {num_objects} objects, got {len(self.object_names)}"
         
-        self.cubeA = self.objects[0]  
-        self.cubeB = self.objects[1]
+        # set by intervention
+        self.cubeA = None
+        self.cubeB = None
         
     def check_objects_visible(self, obj_a, obj_b, camera):
         """
@@ -288,7 +297,8 @@ class StackCubeEnv(BaseEnv):
         grasp_pose = obj_a
         tcp_pose = obj_a
         action_text = "check visibility"
-        enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
+        action_encoder = getActionEncInstance("xyzrotvec-cam-proj2")
+        enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_a, obj_b,
                                                                 camera, grasp_pose, tcp_pose,
                                                                 action_text, enc_func, robot_pose=None)
@@ -301,14 +311,7 @@ class StackCubeEnv(BaseEnv):
             b = len(env_idx)
             self.table_scene.initialize(env_idx)
 
-            xyz = torch.zeros((b, 3))
-            if self.scene_dataset == "ProcTHOR":
-                xyz[:, 2] = self.object_region[2][0]
-            else:
-                xyz[:, 2] = 0.0 #0.02
-                # Random global shift
-                xy = torch.rand((b, 2)) * 0.2 - 0.1 # rand is uniform [0,1], so shift to [-0.1, 0.1]
-
+            assert isinstance(self.object_region, np.ndarray)
             # We have to flip the object region as it is defined as 
             #   [[min_1, max_1], [min_2, max_2], ...]
             # but the sampler expects
@@ -317,19 +320,38 @@ class StackCubeEnv(BaseEnv):
             
             # TODO [NH] This is not good, radius should depend on the object 
             # radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001 # Radius is get
-            
-            for shape, descr in zip(self.objects, self.objects_descr):
+            for shape in self.objects:
+                xyz = torch.zeros((b, 3))
                 # Get radius of object
                 radius = np.linalg.norm(get_actor_obb(shape).primitive.extents) / 2
                 if self.scene_dataset == "ProcTHOR":
+                    xyz[:, 2] = self.object_region[2][0]
                     region_mins = [x[0] for x in self.object_region]
                     region_maxs = [x[1] for x in self.object_region]
                     xyz[:,] = randomization.uniform(region_mins, region_maxs, size=(1,))
                     xyz[:,2] += 0.02
                 else:
+                    # Random global shift
+                    xy = torch.rand((b, 2)) * 0.2 - 0.1 # rand is uniform [0,1], so shift to [-0.1, 0.1]
                     shape_xy = xy + sampler.sample(radius, max_trials=100, verbose=False)
                     xyz[:, :2] = shape_xy
 
+                    table = self.scene.actors['table-workspace']
+                    table_box = get_actor_obb(table, to_world_frame=True)
+                    table_z = table_box.vertices[:, 2].max()
+                    shape_box = get_actor_obb(shape, to_world_frame=True)
+                    if self.object_dataset == "clevr":
+                        # load primitives, origin is at object center (i think)
+                        if "box" in shape.name:
+                            # TODO(max): what's wrong here?
+                            height = (shape_box.vertices[:, 2].max()-shape_box.vertices[:, 2].min())/2
+                        else:
+                            height = shape_box.primitive.extents[2] / 2.
+                    else:
+                        # load meshes, origin is at object bottom
+                        height = 0
+                    xyz[:, 2] = table_z + height
+                    
                 qs = randomization.random_quaternions(
                     b,
                     lock_x=True,
@@ -349,22 +371,20 @@ class StackCubeEnv(BaseEnv):
             self.grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
 
             are_visible = False
-            if self.RANDOMIZE_VIEW:
-                self.initalize_render_camera_random()
-                for i in range(self.RESAMPLE_CAMERA_IF_OBJS_UNSEEN):
+            self.initalize_render_camera()
+            if self.camera_views != "fixed":
+                for i in range(self.cam_resample_if_objs_unseen):
                     camera = self.scene.human_render_cameras['render_camera'].camera 
                     #print("XXX", camera.get_extrinsic_matrix())
                     are_visible = self.check_objects_visible(obj_start, obj_end, camera)
                     if are_visible:
                         break
-                    self.initalize_render_camera_random()
+                    self.initalize_render_camera()
                     self._setup_sensors(options)
                 if not are_visible:
                     print("Warning: could not sample visible camera position.")
                 
-            else:
-                self.initalize_render_camera_fixed()
-
+            
 
     def set_goal_pose(self, objA_goal_pose):
         # Move cubeA onto cubeB
@@ -390,7 +410,27 @@ class StackCubeEnv(BaseEnv):
                    grasp_pose=self.grasp_pose.raw_pose, tcp_pose=tcp_pose.raw_pose, robot_pose=robot_pose.raw_pose)
         obs["action_text_"+self.action_text] = 123
         return obs
-    
+
+    def get_obs_scene(self, save_actors=True):
+        """get scene info"""
+        object_info = {}
+        for seg_id, obj in sorted(self.unwrapped.segmentation_id_map.items()):
+            save_actors_now = save_actors and obj in self.scene.actors.values()
+            save_objects = obj in self.objects
+            if not (save_actors_now or save_objects):
+                continue
+            obj_in_action = int(obj in (self.cubeA, self.cubeB))
+            object_info[obj.name] = dict(seg_id=seg_id, task_req=obj_in_action)
+            try:
+                # seg_id_to_initial_frame_percent written in run_env.py
+                seg_percent = self.seg_id_to_initial_frame_percent[obj.name]
+                object_info[obj.name]["seg_percent"] = seg_percent
+            except (AttributeError, KeyError):
+                pass
+
+        scene_info = dict(text=self.action_text, object_info=object_info)
+        return scene_info
+
     def reset(self, seed: Union[None, int, list[int]] = None, options: Union[None, dict] = None):
         if self.object_dataset == "clevr":
             pass

@@ -1,20 +1,7 @@
 from typing import List
-
 import numpy as np
 from mani_skill.utils.structs import Pose
-
 from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
-
-# Text Generation stuff
-
-def create_text_names(env):
-    objects_descr = env.objects_descr
-    names = []
-    for descr in objects_descr:
-        name = f'{descr["size"]} {descr["color"]} {descr["shape"]}'.strip()
-        names.append(name)
-    return names
-
 
 # Environment interactions
 
@@ -26,7 +13,7 @@ def create_text_names(env):
 #     object.set_pose(pose)
 
 def move_object_onto(env, randomize_text=False, pretend=False):
-    # Move cubeA onto cubeB
+    # Sample objects
     env = env.unwrapped
     objects = env.objects
     assert len(objects) >= 2
@@ -36,45 +23,50 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     else:
         print("Warning: not enough unique objects")
         object_id_move, object_id_base = np.random.choice(range(len(objects)), 2, replace=False)
-    pose_base = objects[object_id_base].pose
+
+    # Move cubeA onto cubeB
+    env.cubeA = objects[object_id_move]
+    env.cubeB = objects[object_id_base]
     obj_start_pose = objects[object_id_move].pose
+    pose_base = objects[object_id_base].pose
     # Pose.create creates a reference
     obj_end_pose = Pose.create_from_pq(p=obj_start_pose.get_p(), q=obj_start_pose.get_q())    
     pos_new = obj_start_pose.get_p().clone().detach()  # don't forget
     pos_base = pose_base.get_p()
     pos_new[:, 0:2] = pos_base[:, 0:2]
 
-    if env.cubeB.name.startswith("clevr"):
-        obbB = get_actor_obb(env.cubeB, to_world_frame=True)
-        obbA = get_actor_obb(env.cubeA, to_world_frame=True)
-        height = obbB.vertices[:, 2].max() + (obbA.vertices[:, 2].max() - obbA.vertices[:, 2].min())/2
-        #height = float(pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2)
-        pos_new[:, 2] = height
-
+    if env.object_dataset == "clevr":
+        # load primitives, origin is at object center (i think)
+        if "box" in env.cubeA.name:
+            obbB = get_actor_obb(env.cubeB, to_world_frame=True)
+            obbA = get_actor_obb(env.cubeA, to_world_frame=True)
+            height = obbB.vertices[:,2].max() + (obbA.vertices[:,2].max()-obbA.vertices[:,2].min())/2
+        else:
+            obbB = get_actor_obb(env.cubeB, to_world_frame=True)
+            obbA = get_actor_obb(env.cubeA, to_world_frame=True)
+            height = float(pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2)
     else:
+        # load meshes, origin is at object bottom
         obbB = get_actor_obb(env.cubeB, to_world_frame=True)
-        obbA = get_actor_obb(env.cubeA, to_world_frame=True)
-        height = float(pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2)
-        pos_new[:, 2] = height
+        height = obbB.vertices[:, 2].max()
+    
+    pos_new[:, 2] = height
 
-    debug_marker = False
-    if debug_marker:
-        import sapien
-        builder = env.scene.create_actor_builder()
-        builder.add_sphere_visual(pose=sapien.Pose(p=[pos_base[0][0], pos_base[0][1], height]), radius=.02, material=sapien.render.RenderMaterial(base_color=[0., 1., 0., 1.]))
-        marker_visual = builder.build_kinematic(name="marker_visual")
+    # debug_marker = False
+    # if debug_marker:
+    #     import sapien
+    #     builder = env.scene.create_actor_builder()
+    #     builder.add_sphere_visual(pose=sapien.Pose(p=[pos_base[0][0], pos_base[0][1], height]), radius=.02, material=sapien.render.RenderMaterial(base_color=[0., 1., 0., 1.]))
+    #     marker_visual = builder.build_kinematic(name="marker_visual")
     
     obj_end_pose.set_p(pos_new)
 
     if not pretend:
         print("trying to move.")
         objects[object_id_move].set_pose(obj_end_pose)
-    
-    env.cubeA = objects[object_id_move]
-    env.cubeB = objects[object_id_base]
-    
+        
     # now creat a text
-    text_names = create_text_names(env)
+    text_names = env.object_names
     verbs = ["move", "place", "transfer", "set", "position", "lift", "relocate", "shift", "put", "bring"]
     prepositions = ["onto", "on top of", "above", "over", "to rest on", "on", "onto the surface of"]
     if randomize_text:

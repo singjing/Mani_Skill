@@ -1,1 +1,1 @@
-../../../cVLA/utils_traj_tokens.py
+../../../cVLA/cvla/utils_traj_tokens.py
