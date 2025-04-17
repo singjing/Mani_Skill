@@ -1,14 +1,12 @@
-# see examples/motionplanning/panda/solutions/stack_cube.py for the template of this
+"""
+See examples/motionplanning/panda/solutions/stack_cube.py for the template of this
+"""
 import gymnasium as gym
 import numpy as np
-import sapien
 
 from mani_skill.envs.tasks import StackCubeEnv
-from mani_skill.examples.motionplanning.panda.motionplanner import \
-    PandaArmMotionPlanningSolver
 from mani_skill.examples.motionplanning.panda.utils import (
     compute_grasp_info_by_obb, get_actor_obb)
-from scipy.spatial.transform import Rotation as R
 
 def object_is_rotationally_invariant(env, obj):
     if env.object_dataset == "clevr" and "sphere" in obj.name:
@@ -19,23 +17,22 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
     FINGER_LENGTH = 0.025
     env = env.unwrapped
     obb = get_actor_obb(env.cubeA)
+    
     approaching = np.array([0, 0, -1])
     target_closing = env.agent.tcp.pose.to_transformation_matrix()[0, :3, 1].numpy()
-
-    compute_grasp_info_by_obb_func = compute_grasp_info_by_obb
-
-    grasp_info = compute_grasp_info_by_obb_func(
+    grasp_info = compute_grasp_info_by_obb(
         obb,
         approaching=approaching,
         target_closing=target_closing,
         depth=FINGER_LENGTH,
     )
 
+    # build a grasp, which has position of center
     closing, center = grasp_info["closing"], grasp_info["center"]
-    # this builds a grasp, which has position of center
     grasp_pose = env.agent.build_grasp_pose(approaching, closing, center)
 
-    # TODO(max): this is very simplified, only considers z-axis, only works for clevr
+    # TODO(max): if object is z-rot invariant, keep current tcp orn
+    # this is very simplified, but works for now
     if object_is_rotationally_invariant(env, env.cubeA):
         grasp_pose.set_q(env.agent.tcp.pose.get_q()[0])
 
@@ -54,47 +51,3 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
     # else:
     #     print("Fail to find a valid grasp pose")
     return grasp_pose, obb
-
-
-def solve(env: StackCubeEnv, seed=None, debug=False, vis=False, dry_run=False):
-    env.reset(seed=seed)
-    assert env.unwrapped.control_mode in [
-        "pd_joint_pos",
-        "pd_joint_pos_vel",
-    ], env.unwrapped.control_mode
-
-    grasp_pose, obb = get_grasp_pose_and_obb(env)
-    env = env.unwrapped
-    reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])    
-    lift_pose = sapien.Pose([0, 0, 0.1]) * grasp_pose
-    height = env.cube_half_size[2] * 2
-    height = obb.primitive.extents[2]/2 + get_actor_obb(env.cubeB).primitive.extents[2]/2 + 0.001
-#    height = 0
-    goal_pose = env.cubeB.pose * sapien.Pose([0, 0, height])
-    offset = (goal_pose.p - env.cubeA.pose.p).numpy()[0] # remember that all data in ManiSkill is batched and a torch tensor
-    align_pose = sapien.Pose(lift_pose.p + offset, lift_pose.q)
-
-    if dry_run:
-        return [reach_pose, grasp_pose, "close_gripper", lift_pose, align_pose, "open_gripper"]
-
-    planner = PandaArmMotionPlanningSolver(
-        env,
-        debug=debug,
-        vis=vis,
-        base_pose=env.unwrapped.agent.robot.pose,
-        visualize_target_grasp_pose=vis,
-        print_env_info=False,
-    )
-    # -------------------------------------------------------------------------- #
-    # Reach
-    planner.move_to_pose_with_screw(reach_pose)
-    # Grasp
-    planner.move_to_pose_with_screw(grasp_pose)
-    planner.close_gripper()
-    # Lift
-    planner.move_to_pose_with_screw(lift_pose)
-    # Stack
-    planner.move_to_pose_with_screw(align_pose)
-    res = planner.open_gripper()
-    planner.close()
-    return res

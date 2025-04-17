@@ -1,18 +1,20 @@
-from typing import List
 import numpy as np
+import sapien.physx as physx
 from mani_skill.utils.structs import Pose
-from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
+from mani_skill.utils.structs import Actor
+from mani_skill.utils.geometry.trimesh_utils import get_component_mesh
 
-# Environment interactions
 
-# def move_object(env, delta_pos=[0, 0, 0.1]):
-#     scene = env.base_env.scene
-#     object = scene.get_all_actors()[1]
-#     pose = object.pose
-#     pose.set_p(pose.p + delta_pos)
-#     object.set_pose(pose)
+def get_actor_mesh(actor: Actor, to_world_frame=True, vis=False):
+    mesh = get_component_mesh(
+        actor._objs[0].find_component_by_type(physx.PhysxRigidDynamicComponent),
+        to_world_frame=to_world_frame,
+    )
+    assert mesh is not None, "can not get actor mesh for {}".format(actor)
+    return mesh
 
-def move_object_onto(env, randomize_text=False, pretend=False):
+
+def move_object_onto(env, pretend=False):
     # Sample objects
     env = env.unwrapped
     objects = env.objects
@@ -36,19 +38,14 @@ def move_object_onto(env, randomize_text=False, pretend=False):
     pos_new[:, 0:2] = pos_base[:, 0:2]
 
     if env.object_dataset == "clevr":
-        # load primitives, origin is at object center (i think)
-        if "box" in env.cubeA.name:
-            obbB = get_actor_obb(env.cubeB, to_world_frame=True)
-            obbA = get_actor_obb(env.cubeA, to_world_frame=True)
-            height = obbB.vertices[:,2].max() + (obbA.vertices[:,2].max()-obbA.vertices[:,2].min())/2
-        else:
-            obbB = get_actor_obb(env.cubeB, to_world_frame=True)
-            obbA = get_actor_obb(env.cubeA, to_world_frame=True)
-            height = float(pos_base[:, 2] + obbB.primitive.extents[2]/2 + obbA.primitive.extents[2]/2)
+        # primitive shapes have origin in center
+        meshA = get_actor_mesh(env.cubeA, to_world_frame=True)
+        meshB = get_actor_mesh(env.cubeB, to_world_frame=True)
+        height = float(meshB.vertices[:,2].max() + (meshA.vertices[:,2].max() - meshA.vertices[:,2].min())/2)
     else:
-        # load meshes, origin is at object bottom
-        obbB = get_actor_obb(env.cubeB, to_world_frame=True)
-        height = obbB.vertices[:, 2].max()
+        # meshes (should) have origin at bottom
+        meshB = get_actor_mesh(env.cubeB, to_world_frame=True)
+        height = float(meshB.vertices[:, 2].max())
     
     pos_new[:, 2] = height
 
@@ -67,15 +64,8 @@ def move_object_onto(env, randomize_text=False, pretend=False):
         
     # now creat a text
     text_names = env.object_names
-    verbs = ["move", "place", "transfer", "set", "position", "lift", "relocate", "shift", "put", "bring"]
-    prepositions = ["onto", "on top of", "above", "over", "to rest on", "on", "onto the surface of"]
-    if randomize_text:
-        raise ValueError("Deprecated, do this in data loader.")
-        verb = np.random.choice(verbs)
-        prep = np.random.choice(prepositions)
-    else:
-        verb = verbs[0]
-        prep = prepositions[0]
+    verb = "move"
+    prep = "onto"
     action_text = f"{verb} {text_names[object_id_move]} {prep} {text_names[object_id_base]}"
     return obj_start_pose, obj_end_pose, action_text
 
@@ -88,16 +78,3 @@ def move_object_onto(env, randomize_text=False, pretend=False):
 # move_object_between
 # upside down
 # rotate
-
-
-# AVA - atomic visual actions dataset
-# Carry/hold (100598)
-# Touch (21099)
-# Lift/pick up (634)
-# Put down (653)
-# Open (1547)
-# Close (986)
-# Push (465)
-# Pull (460)
-# Throw (336)
-# Catch (97)
