@@ -6,6 +6,7 @@ from typing import Any, Dict, Union, Optional
 import numpy as np
 import torch
 import sapien
+from scipy.spatial.transform import Rotation as R
 
 from mani_skill import ASSET_DIR
 from mani_skill.agents.robots import Fetch, Panda
@@ -23,9 +24,11 @@ from mani_skill.utils.io_utils import load_json
 from mani_skill.examples.utils_env_interventions import move_object_onto
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix, getActionEncInstance
 from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
+from mani_skill.examples.utils_env_interventions import get_actor_mesh
 
 
 from pdb import set_trace
+
 
 @register_env("ClevrMove-v1", max_episode_steps=50)
 class StackCubeEnv(BaseEnv):
@@ -34,7 +37,6 @@ class StackCubeEnv(BaseEnv):
     SUPPORTED_SCENE_DATASETS = ['Table', 'ProcTHOR']
     SUPPORTED_CAM_VIEWS = ['fixed', 'random_side', 'random']
     agent: Union[Panda, Fetch]
-
 
     def __init__(
         self, *args, robot_uids="panda_wristcam", scene_dataset="Table", object_dataset="clevr",
@@ -77,36 +79,48 @@ class StackCubeEnv(BaseEnv):
         return pose
         
     def initalize_render_camera(self):
+        fov_range = [1.0, 1.0]
+        z_range = [0.0, 0.0]
+
         if self.camera_views == "fixed":
             start_p = [0.6, 0.7, 0.6]
             end_p = [0.0, 0.0, 0.12]
             t = 0.5
-            new_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
-            pose = sapien_utils.look_at(new_p, end_p)
-            self.render_camera_config = CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
-            #self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
-            return
-        
-        elif self.camera_views == "random_side":
-            cylinder_l = np.array([.35, -np.pi*4/5, .26])
-            cylinder_h = np.array([.55,  np.pi*4/5, .46])
-
-        elif self.camera_views == "random":
-            cylinder_l = np.array([.0, -np.pi, .25])
-            cylinder_h = np.array([.50,  np.pi, .65])
+            start_p = (np.array(start_p)*t + np.array(end_p)*(1-t)).tolist()
         else:
-            raise ValueError(f"unknown camera_views {self.camera_views}, options {self.SUPPORTED_CAM_VIEWS}")
+            if self.camera_views == "random_side":
+                cylinder_l = np.array([.35, -np.pi*4/5, .26])
+                cylinder_h = np.array([.55,  np.pi*4/5, .46])
+
+            elif self.camera_views == "random":
+                cylinder_l = np.array([.0, -np.pi, .25])
+                cylinder_h = np.array([.50,  np.pi, .65])
+            
+            elif self.camera_views == "random_fov":
+                cylinder_l = np.array([.0, -np.pi, .25])
+                cylinder_h = np.array([.50,  np.pi, .65])
+                fov_range = [np.deg2rad(50), np.deg2rad(75)]
+                z_range = [-15, 15]
+            else:
+                raise ValueError(f"unknown camera_views {self.camera_views}, options {self.SUPPORTED_CAM_VIEWS}")
         
-        r, phi, z = randomization.uniform(cylinder_l, cylinder_h, size=(3,)).cpu().numpy().astype(float)
-        start_p = [r * np.cos(phi), r * np.sin(phi), z]
-        end_p = randomization.uniform(*zip(*self.object_region),size=(3,)).cpu().numpy().astype(float)
-        
+            r, phi, z = randomization.uniform(cylinder_l, cylinder_h, size=(3,)).cpu().numpy().astype(float)
+            start_p = [r * np.cos(phi), r * np.sin(phi), z]
+            end_p = randomization.uniform(*zip(*self.object_region),size=(3,)).cpu().numpy().astype(float)
+
+        fov = randomization.uniform(*fov_range, size=(1,)).cpu().numpy().astype(float)[0]            
+        z_rot = randomization.uniform(*z_range, size=(1,)).cpu().numpy().astype(float)[0]
+        #print("fov", fov, "z_rot", z_rot)
+        z_rot_orn = R.from_euler("xyz", (0, 0, z_rot), degrees=True)
+        z_rot_pose = Pose.create_from_pq(q=z_rot_orn.as_quat(scalar_first=True))
+
         # TODO(max): fix this
         if self.scene_dataset == "ProcTHOR":
             start_p = (np.array(start_p) + np.array(end_p)).tolist()
 
-        pose = sapien_utils.look_at(start_p, end_p)
-        self.render_camera_config = CameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+        pose = sapien_utils.look_at(start_p, end_p) * z_rot_pose
+        self.render_camera_config = CameraConfig("render_camera", pose, width=self.cam_size, height=self.cam_size,
+                                                 fov=fov, near=0.01, far=100)
         #self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
 
     @property
@@ -229,9 +243,6 @@ class StackCubeEnv(BaseEnv):
 
             self.objects.append(obj_builder.build(name=f"{model_name}"))
             self.object_names.append(shape_name)
-
-            # from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
-            # print("sizes", model_name, get_actor_obb(self.objects[-1]).primitive.extents)
         
         unique_vals, counts = np.unique(uuids, return_counts=True)
         count_dict = dict(zip(unique_vals, counts))
@@ -336,19 +347,12 @@ class StackCubeEnv(BaseEnv):
                     xyz[:, :2] = shape_xy
 
                     table = self.scene.actors['table-workspace']
-                    table_box = get_actor_obb(table, to_world_frame=True)
-                    table_z = table_box.vertices[:, 2].max()
-                    shape_box = get_actor_obb(shape, to_world_frame=True)
+                    table_z = get_actor_mesh(table, to_world_frame=True).vertices[:, 2].max()
+                    shape_mesh = get_actor_mesh(shape, to_world_frame=True)
                     if self.object_dataset == "clevr":
-                        # load primitives, origin is at object center (i think)
-                        if "box" in shape.name:
-                            # TODO(max): what's wrong here?
-                            height = (shape_box.vertices[:, 2].max()-shape_box.vertices[:, 2].min())/2
-                        else:
-                            height = shape_box.primitive.extents[2] / 2.
+                        height = (shape_mesh.vertices[:, 2].max()-shape_mesh.vertices[:, 2].min())/2
                     else:
-                        # load meshes, origin is at object bottom
-                        height = 0
+                        height = 0  # load meshes, origin is at object bottom
                     xyz[:, 2] = table_z + height
                     
                 qs = randomization.random_quaternions(
@@ -382,8 +386,6 @@ class StackCubeEnv(BaseEnv):
                     self._setup_sensors(options)
                 if not are_visible:
                     print("Warning: could not sample visible camera position.")
-                
-            
 
     def set_goal_pose(self, objA_goal_pose):
         # Move cubeA onto cubeB
