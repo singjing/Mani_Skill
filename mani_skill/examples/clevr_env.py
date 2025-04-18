@@ -423,6 +423,14 @@ class StackCubeEnv(BaseEnv):
             save_objects = obj in self.objects
             if not (save_actors_now or save_objects):
                 continue
+
+            if obj == self.cubeA:
+                obj_in_action = 1
+            elif obj == self.cubeB:
+                obj_in_action = 2
+            else:
+                obj_in_action = 0
+                
             obj_in_action = int(obj in (self.cubeA, self.cubeB))
             object_info[obj.name] = dict(seg_id=seg_id, task_req=obj_in_action)
             try:

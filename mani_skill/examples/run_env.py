@@ -5,38 +5,32 @@ python run_env.py -od objaverse
 
 Option 2: record trajectories (e.g. with rt shader)
 python run_env.py --record_dir /tmp/cvla-test --N_samples=10
-
-CUDA_VISIBLE_DEVICES=0 python run_env.py --record_dir /tmp/cvla-clevr-8 --N_samples=150000
-CUDA_VISIBLE_DEVICES=1 python run_env.py -od objaverse --record_dir /tmp/cvla-obja-8 --N_samples=150000
-
 """
-import gymnasium as gym
-import numpy as np
-import random
-import sapien
 import os
 import json
-from pathlib import Path
-from tqdm import tqdm
 import time
-from copy import deepcopy
+import random
 import traceback
-import tyro
+import multiprocessing
+from pathlib import Path
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import List, Optional, Annotated, Union
 
-#from mani_skill.envs.sapien_env import BaseEnv
-from mani_skill.utils.wrappers import RecordEpisode
+import tyro
+import numpy as np
+from tqdm import tqdm
+import gymnasium as gym
+import sapien
+
 from mani_skill.utils.structs import Pose
-        
+from mani_skill.utils.wrappers import RecordEpisode        
 import mani_skill.examples.clevr_env  # do import to register env, not used otherwise
-from cvla.utils_trajectory import generate_curve_torch
-from cvla.utils_traj_tokens import to_prefix_suffix
-from cvla.utils_traj_tokens import getActionEncInstance
-from cvla.utils_trajectory import DummyCamera
+from cvla.utils_trajectory import generate_curve_torch, DummyCamera
+from cvla.utils_traj_tokens import getActionEncInstance, to_prefix_suffix
 
 from pdb import set_trace
-import multiprocessing
+
 
 RAND_MAX = 2**32 - 1
 SAVE_FREQ = 1
@@ -108,6 +102,7 @@ class Args:
 
     N_samples: Annotated[Optional[int], tyro.conf.arg(aliases=["-N"])] = 50
     """Number of samples"""
+
 
 def reset_random(args, orig_seeds):
     if orig_seeds is None:
@@ -398,6 +393,7 @@ def run_iteration(parsed_args, N_samples, process_num=None, progress_bar=None):
         if progress_bar is not None:
             progress_bar.value += 1
 
+
 def save_multiproces(parsed_args, N_samples, N_processes=10):
         from utils_record import check_no_uncommitted_changes, get_git_commit_hash
         parsed_args.run_mode = "first"
@@ -457,6 +453,7 @@ def save_multiproces(parsed_args, N_samples, N_processes=10):
             #await asyncio.gather(*tasks)
             for p in tasks:
                 p.join()  # Wait for all processes to finish
+
 
 if __name__ == "__main__":
     parsed_args = tyro.cli(Args)
