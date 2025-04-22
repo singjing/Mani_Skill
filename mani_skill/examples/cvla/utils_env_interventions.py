@@ -1,8 +1,12 @@
 import numpy as np
+import torch
 import sapien.physx as physx
+from mani_skill.utils.common import quat_multiply
 from mani_skill.utils.structs import Pose
 from mani_skill.utils.structs import Actor
 from mani_skill.utils.geometry.trimesh_utils import get_component_mesh
+from mani_skill.sensors.camera import parse_camera_configs
+
 
 def get_actor_mesh(actor: Actor, to_world_frame=True, vis=False):
     mesh = get_component_mesh(
@@ -69,16 +73,6 @@ def move_object_onto(env, pretend=False):
     return obj_start_pose, obj_end_pose, action_text
 
 
-<<<<<<< HEAD
-# TODO(shardul):
-# Option1: start here
-# move_object_next_to
-# move_object_leftrightbehind
-# move_object_upright (select shapes)
-# move_object_between
-# upside down
-# rotate
-=======
 def quat_multiply(q1, q2):
     """Computes the Hamilton product of two quaternions."""
     w1, x1, y1, z1 = q1.unbind(dim=-1)
@@ -488,5 +482,3 @@ def move_object_forward_backward(env, direction="forward", pretend=False, offset
     action_text = f"{verb} {text_names[object_id_move]} {prep} "
 
     return obj_start_pose, obj_end_pose, action_text
-
->>>>>>> 5b40c960 (fix)
