@@ -49,13 +49,13 @@ class SceneBuilder:
         self.env = env
         self.robot_init_qpos_noise = robot_init_qpos_noise
 
-    def build(self, build_config_idxs: List[int] = None):
+    def build(self, build_config_idxs: Optional[List[int]] = None):
         """
         Should create actor/articulation builders and only build objects into the scene without initializing pose, qpos, velocities etc.
         """
         raise NotImplementedError()
 
-    def initialize(self, env_idx: torch.Tensor, init_config_idxs: List[int] = None):
+    def initialize(self, env_idx: torch.Tensor, init_config_idxs: Optional[List[int]] = None):
         """
         Should initialize the scene, which can include e.g. setting the pose of all objects, changing the qpos/pose of articulations/robots etc.
         """
