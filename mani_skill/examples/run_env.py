@@ -100,6 +100,9 @@ class Args:
     camera_views: Annotated[Optional[str], tyro.conf.arg(aliases=["-cv"])] = "random"
     """Dataset from which we sample objects"""
 
+    scene_options: Annotated[Optional[str], tyro.conf.arg(aliases=["-so"])] = "fixed"
+    """Randomize the scene"""
+
     N_samples: Annotated[Optional[int], tyro.conf.arg(aliases=["-N"])] = 50
     """Number of samples"""
 
@@ -116,7 +119,8 @@ def reset_random(args, orig_seeds):
     args.seed = [seed]
     np.random.seed(seed)
 
-    
+import mani_skill.agents.robots.floating_inspire_hand.floating_inspire_hand
+
 def iterate_env(args: Args, vis=True, model=None):
     np.set_printoptions(suppress=True, precision=3)
     verbose = not args.quiet
@@ -141,10 +145,11 @@ def iterate_env(args: Args, vis=True, model=None):
             num_envs=args.num_envs,
             sim_backend=args.sim_backend,
             parallel_in_single_scene=parallel_in_single_scene,
-            robot_uids="panda",  #fetch, panda_wristcam
+            robot_uids="panda",  #fetch, panda_wristcam, xarm6_robotiq, floating_inspire_hand_right,
             scene_dataset="Table", # Table, ProcTHOR
             object_dataset=args.object_dataset, # clevr, ycb, objaverse
-            camera_views=args.camera_views
+            camera_views=args.camera_views,
+            scene_options=args.scene_options,
             #camera_cfgs={"use_stereo_depth": True, },
             # **args.env_kwargs
         )
@@ -214,29 +219,12 @@ def iterate_env(args: Args, vis=True, model=None):
         else:
             env.render()
 
-        # Note: overwriting _default_sensor_configs in env with camera called "render_camera"
-
         env_idx = 0
-        # get image before intervention (randomization of human_render_camera is done by clevr_env.py)
         
-        # #-----
-        # # Warning, taking an image form obs/rendering it results in different calibrations!
-        # #----
-        # images = env.base_env.scene.get_human_render_camera_images('render_camera')
-        # image_before = images['render_camera'][env_idx].numpy()
-        # #image_before = obs['sensor_data']['render_camera']['rgb'][0].detach().numpy()
-        # assert image_before.shape == (448, 448, 3)
-
-        # # do intervention (this will set env.base_env.cubeA onto cubeB)
-        # obj_start, obj_end, action_text = move_object_onto(env, pretend=True)
-        # env.unwrapped.set_goal_pose(obj_end)
-        
-        #camera = env.base_env.scene.human_render_cameras['render_camera'].camera
-        # grasp_pose, _ = get_grasp_pose_and_obb(env.base_env)
-        # grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
-        # tcp_pose = env.unwrapped.agent.tcp.pose
-        # robot_pose = env.base_env.agent.robot.get_root_pose()
-
+        #-----
+        # Warning, taking an image form obs/rendering it results in different calibrations!
+        # e.g. images = env.base_env.scene.get_human_render_camera_images('render_camera')
+        #-----
         obj_start = Pose(obs["extra"]["obj_start"].clone().detach())
         obj_end = Pose(obs["extra"]["obj_end"].clone().detach())
         grasp_pose = Pose(obs["extra"]["grasp_pose"].clone().detach())
@@ -253,11 +241,8 @@ def iterate_env(args: Args, vis=True, model=None):
             image_before = None
             camera = env.base_env.scene.human_render_cameras['render_camera'].camera
 
-        action_text = None
-        for x in obs["extra"].keys():
-            if x.startswith("action_text_"):
-                action_text = str(x).replace("action_text_", "")
-        assert action_text is not None
+        action_text = env.unwrapped.get_obs_scene()["text"]
+        assert isinstance(action_text, str) and action_text not in (None, ""), f"action_text: {action_text}"
 
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                       camera, grasp_pose, tcp_pose,

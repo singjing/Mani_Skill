@@ -25,6 +25,7 @@ from mani_skill.examples.utils_env_interventions import move_object_onto
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix, getActionEncInstance
 from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
 from mani_skill.examples.utils_env_interventions import get_actor_mesh
+from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb
 
 
 from pdb import set_trace
@@ -40,7 +41,7 @@ class StackCubeEnv(BaseEnv):
 
     def __init__(
         self, *args, robot_uids="panda_wristcam", scene_dataset="Table", object_dataset="clevr",
-        camera_views="random", robot_init_qpos_noise=0.02, **kwargs
+        camera_views="random", scene_options="fixed", robot_init_qpos_noise=0.02, **kwargs
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.scene_dataset = scene_dataset
@@ -59,6 +60,7 @@ class StackCubeEnv(BaseEnv):
 
         self.camera_views = camera_views
         self.cam_resample_if_objs_unseen = 100  # unseen as in not in cam fustrum
+        self.scene_options = scene_options
 
         # cached stuff for loaders
         self.objects = []
@@ -251,7 +253,13 @@ class StackCubeEnv(BaseEnv):
     def _load_scene(self, options: dict):
         if self.scene_dataset == "Table":
             self.table_scene = TableSceneBuilder(env=self, robot_init_qpos_noise=self.robot_init_qpos_noise)
-            self.table_scene.build()
+            if self.scene_options == "fixed":
+                scene_choice = None
+            else:
+                num_options = self.table_scene.NUM_SCENE_OPTIONS
+                scene_choice = [int(randomization.uniform(float(0), float(num_options), size=(1,)))]
+                
+            self.table_scene.build(scene_choice)
 
         elif self.scene_dataset == "ProcTHOR":
             self.table_scene = ProcTHORSceneBuilder(env=self, robot_init_qpos_noise=self.robot_init_qpos_noise)
@@ -369,8 +377,17 @@ class StackCubeEnv(BaseEnv):
             self.obj_start = obj_start
             self.obj_end = obj_end
             self.action_text = action_text
-            from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb    
-            grasp_pose, _ = get_grasp_pose_and_obb(self)
+            try:
+                grasp_pose, _ = get_grasp_pose_and_obb(self)
+            except AttributeError:
+                print("Warning: finding grasp pose failed, using object pose")
+                grasp_pose = obj_start
+            try:
+                self.agent.tcp
+            except AttributeError:
+                print("Warning: Robot has not TPC, using object pose")
+                self.agent.tcp = type("Fake-TCP", (), {"pose": grasp_pose})()
+
             self.grasp_pose = Pose.create_from_pq(p=grasp_pose.get_p(), q=grasp_pose.get_q())
 
             are_visible = False
@@ -412,7 +429,6 @@ class StackCubeEnv(BaseEnv):
         robot_pose = self.agent.robot.get_root_pose()
         obs = dict(obj_start=self.obj_start.raw_pose, obj_end=self.obj_end.raw_pose,
                    grasp_pose=self.grasp_pose.raw_pose, tcp_pose=tcp_pose.raw_pose, robot_pose=robot_pose.raw_pose)
-        obs["action_text_"+self.action_text] = 123
         return obs
 
     def get_obs_scene(self, save_actors=True):
@@ -430,7 +446,7 @@ class StackCubeEnv(BaseEnv):
                 obj_in_action = 2
             else:
                 obj_in_action = 0
-                
+
             obj_in_action = int(obj in (self.cubeA, self.cubeB))
             object_info[obj.name] = dict(seg_id=seg_id, task_req=obj_in_action)
             try:

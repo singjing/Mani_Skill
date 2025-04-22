@@ -36,11 +36,25 @@ def merge_h5_files(directories, output_file):
     
     print(f"Merged {traj_offset} trajectories into {output_file}")
 
+from dataclasses import dataclass
+from typing import Annotated
+import tyro
+
+@dataclass
+class Args:
+    root_dir: Annotated[str, tyro.conf.arg(aliases=["--root_dir"])] = "/tmp/cvla-1"
+    """The root directory to merge"""
+
+    datasets_dir: Annotated[str, tyro.conf.arg(aliases=["--datasets_dir"])] = "/data/lmbraid19/argusm/datasets"
+    """Where to put the merged data"""
+    
 
 if __name__ == "__main__":
     import shutil
+    import subprocess
     # Get all pN directories in the current directory
-    root_dir = Path("/tmp/cvla-obja-8")
+    parsed_args = tyro.cli(Args)
+    root_dir = Path(parsed_args.root_dir)
     assert root_dir.exists(), f"Directory {root_dir} does not exist."
     print("source:", root_dir)
 
@@ -69,7 +83,10 @@ if __name__ == "__main__":
     for p in tqdm(p_dirs):
         shutil.move(p, old_dir / p.name)
     
-    datasets_dir = "/data/lmbraid19/argusm/datasets"
-    print(f"\nrsync -a --progress {root_dir} {datasets_dir}")
-
+    datasets_dir = parsed_args.datasets_dir
+    cmd = f"rsync -a --progress {root_dir} {datasets_dir}"
+    print("\n" + cmd)
+    subprocess.run(cmd, shell=True)
+    print("done.")
+    
     
