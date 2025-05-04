@@ -287,8 +287,15 @@ def iterate_env(args: Args, vis=True, model=None):
                 curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
                 orns_3d = orns_3d_pred
 
+            
+            # start and stop poses
+            if curve_3d.shape[1] != 2 or orns_3d.shape[1] != 2:
+                json_dict["reward"] = 0.0
+                yield image_before, json_dict, args.seed[0]
+                N_valid_samples += 1
+                continue
+            
             # convert two keypoints into motion sequence
-            assert curve_3d.shape[1] == 2 and orns_3d.shape[1] == 2  # start and stop poses
             _, curve_3d_i = generate_curve_torch(curve_3d[:, 0], curve_3d[:, -1], num_points=3)
             grasp_pose = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
             reach_pose = grasp_pose * sapien.Pose([0, 0, -0.10]) # Go above the object before grasping
