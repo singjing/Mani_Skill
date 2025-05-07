@@ -1,7 +1,10 @@
 import os
 from pathlib import Path
+from typing import Annotated
 from datetime import datetime
+from dataclasses import dataclass
 
+import tyro
 import h5py
 from tqdm import tqdm
 
@@ -36,9 +39,6 @@ def merge_h5_files(directories, output_file):
     
     print(f"Merged {traj_offset} trajectories into {output_file}")
 
-from dataclasses import dataclass
-from typing import Annotated
-import tyro
 
 @dataclass
 class Args:
@@ -88,5 +88,4 @@ if __name__ == "__main__":
     print("\n" + cmd)
     subprocess.run(cmd, shell=True)
     print("done.")
-    
     

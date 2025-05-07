@@ -89,19 +89,25 @@ class Args:
     """Seed(s) for random actions and simulator. Can be a single integer or a list of integers. Default is None (no seeds)"""
 
     run_mode: Annotated[Optional[str], tyro.conf.arg(aliases=["-m"])] = "script"
-    """Run a script|interactive|first. first renders first frame only"""
+    """Run mode, options are script, interactive, first"""
 
-    action_encoder: Annotated[Optional[str], tyro.conf.arg(aliases=["-ae"])] = "xyzrotvec-cam-1024xy"
-    """Action encoding"""
+    robot_uids: Annotated[Optional[str], tyro.conf.arg(aliases=["-r"])] = "panda"
+    """Robots, options are: panda, panda_wristcam, xarm6_robotiq, floating_inspire_hand_right"""
 
-    object_dataset: Annotated[Optional[str], tyro.conf.arg(aliases=["-od"])] = "clevr"
-    """Dataset from which we sample objects"""
-
-    camera_views: Annotated[Optional[str], tyro.conf.arg(aliases=["-cv"])] = "random"
-    """Dataset from which we sample objects"""
+    scene_dataset: Annotated[Optional[str], tyro.conf.arg(aliases=["-sd"])] = "Table"
+    """Scene datasets: options are: Table, ProcTHOR"""
 
     scene_options: Annotated[Optional[str], tyro.conf.arg(aliases=["-so"])] = "fixed"
     """Randomize the scene"""
+
+    object_dataset: Annotated[Optional[str], tyro.conf.arg(aliases=["-od"])] = "clevr"
+    """Dataset from which we sample objects, options are: clevr, ycb, objaverse"""
+
+    camera_views: Annotated[Optional[str], tyro.conf.arg(aliases=["-cv"])] = "random_side"
+    """Dataset from which we sample objects"""
+
+    action_encoder: Annotated[Optional[str], tyro.conf.arg(aliases=["-ae"])] = "xyzrotvec-cam-1024xy"
+    """Action encoding"""
 
     N_samples: Annotated[Optional[int], tyro.conf.arg(aliases=["-N"])] = 50
     """Number of samples"""
@@ -145,9 +151,9 @@ def iterate_env(args: Args, vis=True, model=None):
             num_envs=args.num_envs,
             sim_backend=args.sim_backend,
             parallel_in_single_scene=parallel_in_single_scene,
-            robot_uids="panda",  #fetch, panda_wristcam, xarm6_robotiq, floating_inspire_hand_right,
-            scene_dataset="Table", # Table, ProcTHOR
-            object_dataset=args.object_dataset, # clevr, ycb, objaverse
+            robot_uids=args.robot_uids,
+            scene_dataset=args.scene_dataset,
+            object_dataset=args.object_dataset, 
             camera_views=args.camera_views,
             scene_options=args.scene_options,
             #camera_cfgs={"use_stereo_depth": True, },
@@ -340,7 +346,11 @@ def iterate_env(args: Args, vis=True, model=None):
         if args.record_dir:
             from mani_skill.examples.utils_record import downcast_seg_array, apply_check_object_pixels
             downcast_seg_array(env)
-            are_vis = apply_check_object_pixels(env, N_percent=0.25)
+            try:
+                are_vis = apply_check_object_pixels(env, N_percent=0.25)
+            except KeyError:
+                print("Warning: missing segmentation, can't filter episode")
+                are_vis = True
 
             #if i % SAVE_FREQ == 0:
             # keep the transition from reset (which does not have an action)
