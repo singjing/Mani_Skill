@@ -363,7 +363,7 @@ class SpokDatasetBuilder:
         ]
 
     def get_object_name(self, obj_uuid):
-        return self.spok_annotations[obj_uuid][obj_uuid]["category"]
+        return self.spok_annotations[obj_uuid]["category"]
 
 
 class SpokDatasetBuilderFast(SpokDatasetBuilder):
