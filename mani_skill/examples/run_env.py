@@ -28,7 +28,7 @@ from mani_skill.utils.wrappers import RecordEpisode
 import mani_skill.examples.clevr_env  # do import to register env, not used otherwise
 from cvla.utils_trajectory import generate_curve_torch, DummyCamera
 from cvla.utils_traj_tokens import getActionEncInstance, to_prefix_suffix
-
+from mani_skill.examples.utils_record import apply_check_object_pixels_obs
 from pdb import set_trace
 
 
@@ -125,7 +125,6 @@ def reset_random(args, orig_seeds):
     args.seed = [seed]
     np.random.seed(seed)
 
-import mani_skill.agents.robots.floating_inspire_hand.floating_inspire_hand
 
 def iterate_env(args: Args, vis=True, model=None):
     np.set_printoptions(suppress=True, precision=3)
@@ -209,6 +208,11 @@ def iterate_env(args: Args, vis=True, model=None):
             traceback.print_exc()  # Prints the full traceback
             continue
 
+        are_vis = apply_check_object_pixels_obs(obs, env, N_percent=0.5)
+        if are_vis is False:
+            print("Warning: object not visible, skipping sample")
+            continue
+
         # Note: when using RecordEpisode this will create 20x the number of saved frames
         # so 75GB -> 1.5 TB, which is no good.
         # Let the objects settle (!)
@@ -287,13 +291,22 @@ def iterate_env(args: Args, vis=True, model=None):
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
                 json_dict["prediction"] = token_pred # TODO(jelena): add [0] here?
                 if token_pred == "" or token_pred is None:
-                    print("No prediction, skipping")
+                    print("Warning: empty prediction, failing")
+                    json_dict["reward"] = 0
+                    yield image_before, json_dict, args.seed[0]
                     continue
-                curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera=camera, robot_pose=robot_pose)
-                curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
-                orns_3d = orns_3d_pred
 
-            
+                try:
+                    curve_3d_pred, orns_3d_pred = dec_func(token_pred, camera=camera, robot_pose=robot_pose)
+                    curve_3d = curve_3d_pred  # set the unparsed trajectory one used for policy
+                    orns_3d = orns_3d_pred
+                # TODO(max): this should only catch value errors
+                except:
+                    print("Warning: exception during decoding tokens, failing", token_pred)
+                    json_dict["reward"] = 0
+                    yield image_before, json_dict, args.seed[0]
+                    continue
+
             # start and stop poses
             if curve_3d.shape[1] != 2 or orns_3d.shape[1] != 2:
                 json_dict["reward"] = 0.0

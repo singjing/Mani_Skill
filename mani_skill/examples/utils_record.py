@@ -96,3 +96,14 @@ def apply_check_object_pixels(env, N_percent):
     env.unwrapped.seg_id_to_initial_frame_percent = id_to_percent
     return are_visible
 
+def apply_check_object_pixels_obs(observation, env, N_percent):
+    """
+    Applies check_object_pixels to each observation in the environment's trajectory buffer.
+    """
+    n_env = observation['sensor_data']['render_camera']['segmentation'].shape[0]
+    assert n_env == 1
+    seg_image = observation['sensor_data']['render_camera']['segmentation'][0].detach().cpu().numpy()
+    assert seg_image.ndim == 3
+    assert seg_image.shape[2] == 1  # one channel
+    obs_scene = env.unwrapped.get_obs_scene()
+    return check_object_pixels(seg_image, obs_scene, N_percent)
