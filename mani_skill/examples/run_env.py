@@ -31,6 +31,9 @@ from cvla.utils_traj_tokens import getActionEncInstance, to_prefix_suffix
 from mani_skill.examples.utils_record import apply_check_object_pixels_obs
 from pdb import set_trace
 
+import gc
+import torch
+
 
 RAND_MAX = 2**32 - 1
 SAVE_FREQ = 1
@@ -116,10 +119,13 @@ class Args:
 def reset_random(args, orig_seeds):
     if orig_seeds is None:
         seed = random.randrange(RAND_MAX)
+        #print("Random seed", seed)
     elif isinstance(orig_seeds, list):
         seed = orig_seeds.pop()
+        #print("Popping seed", seed)
     elif isinstance(orig_seeds, int):
-        seed = orig_seeds        
+        seed = orig_seeds
+        #print("Using seed", seed)        
     else:
         raise ValueError
     args.seed = [seed]
@@ -245,8 +251,11 @@ def iterate_env(args: Args, vis=True, model=None):
             camera_intrinsic = obs["sensor_param"]["render_camera"]["intrinsic_cv"].clone().detach()
             camera_extrinsic = obs["sensor_param"]["render_camera"]["extrinsic_cv"].clone().detach()
             image_before = obs["sensor_data"]["render_camera"]["rgb"][0].clone().detach()
+            depth = obs["sensor_data"]["render_camera"]["depth"][0].clone().detach()
             width, height, _ = image_before.shape
             camera = DummyCamera(camera_intrinsic, camera_extrinsic, width, height)
+            # add depth to image_before
+            image_before = (depth, image_before)
         except KeyError:
             image_before = None
             camera = env.base_env.scene.human_render_cameras['render_camera'].camera
@@ -258,8 +267,9 @@ def iterate_env(args: Args, vis=True, model=None):
                                                                       camera, grasp_pose, tcp_pose,
                                                                       action_text, enc_func, robot_pose=robot_pose)
         # skip saving this file, we won't use it anyway
-        if filter_visible and info["didclip_traj"]:
-            continue
+        #if filter_visible and info["didclip_traj"]:
+        #    print("Skipping because of filtering visible and didclip_traj")
+        #    continue
 
         json_dict = dict(prefix=prefix, suffix=token_str,
                          action_text=action_text,
@@ -309,6 +319,7 @@ def iterate_env(args: Args, vis=True, model=None):
 
             # start and stop poses
             if curve_3d.shape[1] != 2 or orns_3d.shape[1] != 2:
+                print("Warning: Model decoded something that is not a valid trajectory")
                 json_dict["reward"] = 0.0
                 yield image_before, json_dict, args.seed[0]
                 N_valid_samples += 1
@@ -382,6 +393,9 @@ def iterate_env(args: Args, vis=True, model=None):
                 video_name =  f"CLEVR_{str(args.seed[0]).zfill(10)}"
                 env.flush_video(name=video_name, save=True)
 
+        del obs
+        gc.collect()
+        torch.cuda.empty_cache()
         yield image_before, json_dict, args.seed[0]
 
         N_valid_samples += 1
