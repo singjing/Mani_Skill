@@ -21,18 +21,17 @@ from mani_skill.utils.scene_builder.table import TableSceneBuilder
 from mani_skill.utils.scene_builder.ai2thor import ProcTHORSceneBuilder
 from mani_skill.utils.structs.pose import Pose
 from mani_skill.utils.io_utils import load_json
-from mani_skill.examples.utils_env_interventions import move_object_onto
-from mani_skill.examples.utils_traj_tokens import to_prefix_suffix, getActionEncInstance
 from mani_skill.examples.motionplanning.panda.utils import get_actor_obb
-from mani_skill.examples.utils_env_interventions import get_actor_mesh
-from mani_skill.examples.clevr_env_solver import get_grasp_pose_and_obb
-
-
+from mani_skill.examples.cvla.utils_env_interventions import move_object_onto, get_actor_mesh
+from mani_skill.examples.cvla.cvla_env_solver import get_grasp_pose_and_obb
+from mani_skill.examples.cvla.utils_traj_tokens import to_prefix_suffix, getActionEncInstance
+from mani_skill.examples.cvla.objaverse_handler import SpocDatasetBuilderFast, get_spoc_builder
+        
 from pdb import set_trace
 
 
-@register_env("ClevrMove-v1", max_episode_steps=50)
-class StackCubeEnv(BaseEnv):
+@register_env("CvlaMove-v1", max_episode_steps=50)
+class CvlaMoveEnv(BaseEnv):
     SUPPORTED_ROBOTS = ["panda_wristcam", "panda", "fetch"]
     SUPPORTED_OBJECT_DATASETS = ["clevr", "ycb", "objaverse"]
     SUPPORTED_SCENE_DATASETS = ['Table', 'ProcTHOR']
@@ -46,10 +45,6 @@ class StackCubeEnv(BaseEnv):
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.scene_dataset = scene_dataset
         self.object_dataset = object_dataset
-        # TODO [NH] This seems not as intended? I would expect it was intended to go 
-        # from -0.1 to 0.1 and -0.2 to 0.2. But now it goes from -0.1 to -0.2 and 0.1 to 0.2
-        # self.object_region = [[-0.1, -0.2], [0.1, 0.2], [.12,.12]]
-        # TODO This is the fix:
         if object_dataset in ["clevr", "ycb"]:
             self.object_region = np.array([[-0.1, 0.1], [-0.2, 0.2], [.12,.12]])
         elif object_dataset == "objaverse":
@@ -66,7 +61,7 @@ class StackCubeEnv(BaseEnv):
         self.objects = []
         self.objaverse_model_ids = None
         self.ycb_model_ids = None
-        self.spok_dataset = None
+        self.spoc_dataset = None
 
         self.initalize_render_camera()  # sets render_camera_config
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
@@ -116,8 +111,8 @@ class StackCubeEnv(BaseEnv):
         z_rot_orn = R.from_euler("xyz", (0, 0, z_rot), degrees=True)
         z_rot_pose = Pose.create_from_pq(q=z_rot_orn.as_quat(scalar_first=True))
 
-        # TODO(max): fix this
         if self.scene_dataset == "ProcTHOR":
+            print("Warning: ProcTHOR camera randomization not well tested.")
             start_p = (np.array(start_p) + np.array(end_p)).tolist()
 
         pose = sapien_utils.look_at(start_p, end_p) * z_rot_pose
@@ -197,11 +192,8 @@ class StackCubeEnv(BaseEnv):
                 raise ValueError('Warning YCB objects not found, try: python -m mani_skill.examples.demo_random_action -e "PickSingleYCB-v1" --render-mode="human"')
                 
         model_ids = randomization.uniform(0.0, float(len(self.ycb_model_ids)),size=(num_objects,)).cpu().numpy().astype(int)
-        #model_ids = [2, 2]  # TODO(max): fix grasping, also 4
         for i, model_idx in enumerate(model_ids):
             model_id = self.ycb_model_ids[model_idx]
-            #model_id = "043_phillips_screwdriver"
-            # TODO: before official release we will finalize a metadata dataclass that these build functions should return.
             builder = actors.get_actor_builder(
                 self.scene,
                 id=f"ycb:{model_id}",
@@ -218,27 +210,24 @@ class StackCubeEnv(BaseEnv):
         self.objects_unique = [count_dict[num] == 1 for num in model_ids]
 
     def _load_scene_objaverse(self, num_objects: int=2):
-        # TODO Refactor to make this explit as Spok?
-        from mani_skill.examples.objaverse_handler import SpokDatasetBuilderFast,SpokDatasetBuilder, get_spok_builder
-        if self.spok_dataset is None:
-            #self.spok_dataset = SpokDatasetBuilder(maximum_objects=20_000)
-            self.spok_dataset = SpokDatasetBuilderFast(maximum_objects=20_000)
+        if self.spoc_dataset is None:
+            self.spoc_dataset = SpocDatasetBuilderFast(maximum_objects=20_000)
 
-        uuids = self.spok_dataset.sample_uuids(num_objects, with_replacement=False)
+        uuids = self.spoc_dataset.sample_uuids(num_objects, with_replacement=False)
         #uuids = ['3239828896624cdaae337e1b8b5ca78f', '2bcfd1118fd245ef88c838f46960d4b3', '54a13e432b9a488ab35d1c6644d9bc0c']
 
         for uuid in uuids:
-            obj_builder = get_spok_builder(self.scene, uuid, add_collision=True, add_visual=True,
-                                           spok_dataset=self.spok_dataset)
+            obj_builder = get_spoc_builder(self.scene, uuid, add_collision=True, add_visual=True,
+                                           spoc_dataset=self.spoc_dataset)
             model_name = f"{uuid}"
             shape_name = f"{uuid}"
             try:
-                shape_name = self.spok_dataset.get_object_name(uuid) # default is three_words
+                shape_name = self.spoc_dataset.get_object_name(uuid) # default is three_words
             except Exception as e:
                 print(f"Could not find CLIP name for {uuid}, using category attribute as {shape_name}")
                 print(f"Exception {e =}")
                 try:
-                    shape_name = self.spok_dataset.get_gpt_name(uuid) # default is three_words
+                    shape_name = self.spoc_dataset.get_gpt_name(uuid) # default is three_words
                 except Exception as e:
                     print(f"Could not find GPT name for {uuid}, using category attribute as {shape_name}")
                     print(f"Exception {e =}")
@@ -336,8 +325,6 @@ class StackCubeEnv(BaseEnv):
             #   [[min_1, min_2, ...], [max_1, max_2, ...]]
             sampler = randomization.UniformPlacementSampler(bounds=self.object_region[:2].T, batch_size=b)
             
-            # TODO [NH] This is not good, radius should depend on the object 
-            # radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001 # Radius is get
             for shape in self.objects:
                 xyz = torch.zeros((b, 3))
                 # Get radius of object

@@ -78,10 +78,8 @@ def compute_grasp_info_by_obb(
     # Find the origin on the surface
     center = T[:3, 3].copy()
     half_size = extents[0] * 0.5
-
-    # This was hte old code, didn't work with long unsymetric shapes
     center = center + approaching * (-half_size + min(depth, half_size))
-    
+
     if ortho:
         closing = closing - (approaching @ closing) * approaching
         closing = common.np_normalize_vector(closing)

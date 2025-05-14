@@ -25,10 +25,10 @@ import sapien
 
 from mani_skill.utils.structs import Pose
 from mani_skill.utils.wrappers import RecordEpisode        
-import mani_skill.examples.clevr_env  # do import to register env, not used otherwise
-from cvla.utils_trajectory import generate_curve_torch, DummyCamera
-from cvla.utils_traj_tokens import getActionEncInstance, to_prefix_suffix
-from mani_skill.examples.utils_record import apply_check_object_pixels_obs
+import mani_skill.examples.cvla.cvla_env  # do import to register env, not used otherwise
+from mani_skill.examples.cvla.utils_trajectory import generate_curve_torch, DummyCamera
+from mani_skill.examples.cvla.utils_traj_tokens import getActionEncInstance, to_prefix_suffix
+from mani_skill.examples.cvla.utils_record import apply_check_object_pixels_obs
 from pdb import set_trace
 
 import gc
@@ -37,7 +37,7 @@ import torch
 
 RAND_MAX = 2**32 - 1
 SAVE_FREQ = 1
-RESET_HARD = 50
+RESET_HARD = 10
 SAVE_VIDEO = False
 
 
@@ -55,7 +55,7 @@ def getMotionPlanner(env):
 
 @dataclass
 class Args:
-    env_id: Annotated[str, tyro.conf.arg(aliases=["-e"])] = "ClevrMove-v1"
+    env_id: Annotated[str, tyro.conf.arg(aliases=["-e"])] = "CvlaMove-v1"
     """The environment ID of the task you want to simulate"""
 
     obs_mode: Annotated[str, tyro.conf.arg(aliases=["-o"])] = "rgb+depth+segmentation"
@@ -173,10 +173,6 @@ def iterate_env(args: Args, vis=True, model=None):
     
     env = make_env()
 
-    filter_visible = True
-    action_encoder = getActionEncInstance(args.action_encoder)
-    enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
-
     if verbose:
         print("Observation space", env.observation_space)
         print("Action space", env.action_space)
@@ -189,11 +185,8 @@ def iterate_env(args: Args, vis=True, model=None):
     action_encoder = getActionEncInstance(args.action_encoder)
     enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
 
-    action_encoder = getActionEncInstance(args.action_encoder)
-    enc_func, dec_func = action_encoder.encode_trajectory, action_encoder.decode_trajectory
-
-    print("filter visible objects", filter_visible)
     print("action encoder", args.action_encoder)
+    print("filter visible objects", filter_visible)
 
     orig_seeds = args.seed
     N_valid_samples = 0
@@ -205,18 +198,21 @@ def iterate_env(args: Args, vis=True, model=None):
         if i != 0 and i % RESET_HARD == 0:
             del env
             env = make_env()
-
         try:
             obs, _ = env.reset(seed=args.seed[0], options=dict(reconfigure=True))
         except Exception as e:  # Catch all exceptions, including AssertionError
             print(f"Encountered error {e.__class__.__name__} at seed {args.seed[0]} while resetting env. Skipping this iteration.")
             print(e)
             traceback.print_exc()  # Prints the full traceback
+            gc.collect()
+            torch.cuda.empty_cache()
             continue
 
         are_vis = apply_check_object_pixels_obs(obs, env, N_percent=0.5)
-        if are_vis is False:
+        if are_vis == False:
             print("Warning: object not visible, skipping sample")
+            gc.collect()
+            torch.cuda.empty_cache()
             continue
 
         # Note: when using RecordEpisode this will create 20x the number of saved frames
@@ -266,10 +262,6 @@ def iterate_env(args: Args, vis=True, model=None):
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                       camera, grasp_pose, tcp_pose,
                                                                       action_text, enc_func, robot_pose=robot_pose)
-        # skip saving this file, we won't use it anyway
-        #if filter_visible and info["didclip_traj"]:
-        #    print("Skipping because of filtering visible and didclip_traj")
-        #    continue
 
         json_dict = dict(prefix=prefix, suffix=token_str,
                          action_text=action_text,
@@ -299,10 +291,12 @@ def iterate_env(args: Args, vis=True, model=None):
                 
             if model:
                 img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
-                json_dict["prediction"] = token_pred # TODO(jelena): add [0] here?
+                json_dict["prediction"] = token_pred
                 if token_pred == "" or token_pred is None:
                     print("Warning: empty prediction, failing")
                     json_dict["reward"] = 0
+                    gc.collect()
+                    torch.cuda.empty_cache()
                     yield image_before, json_dict, args.seed[0]
                     continue
 
@@ -314,6 +308,8 @@ def iterate_env(args: Args, vis=True, model=None):
                 except:
                     print("Warning: exception during decoding tokens, failing", token_pred)
                     json_dict["reward"] = 0
+                    gc.collect()
+                    torch.cuda.empty_cache()
                     yield image_before, json_dict, args.seed[0]
                     continue
 
@@ -321,6 +317,8 @@ def iterate_env(args: Args, vis=True, model=None):
             if curve_3d.shape[1] != 2 or orns_3d.shape[1] != 2:
                 print("Warning: Model decoded something that is not a valid trajectory")
                 json_dict["reward"] = 0.0
+                gc.collect()
+                torch.cuda.empty_cache()
                 yield image_before, json_dict, args.seed[0]
                 N_valid_samples += 1
                 continue
@@ -368,7 +366,7 @@ def iterate_env(args: Args, vis=True, model=None):
             raise ValueError
 
         if args.record_dir:
-            from mani_skill.examples.utils_record import downcast_seg_array, apply_check_object_pixels
+            from mani_skill.examples.cvla.utils_record import downcast_seg_array, apply_check_object_pixels
             downcast_seg_array(env)
             try:
                 are_vis = apply_check_object_pixels(env, N_percent=0.25)
@@ -424,7 +422,7 @@ def run_iteration(parsed_args, N_samples, process_num=None, progress_bar=None):
 
 
 def save_multiproces(parsed_args, N_samples, N_processes=10):
-        from utils_record import check_no_uncommitted_changes, get_git_commit_hash
+        from mani_skill.examples.cvla.utils_record import check_no_uncommitted_changes, get_git_commit_hash
         parsed_args.run_mode = "first"
         dataset_path = Path(parsed_args.record_dir)
         os.makedirs(dataset_path, exist_ok=True)

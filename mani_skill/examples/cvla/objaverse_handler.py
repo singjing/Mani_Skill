@@ -1,56 +1,36 @@
-import pathlib
 import json
-import requests
+import gzip
+import shutil
 import tarfile
-
+import pathlib
+import requests
+import itertools
+from pathlib import Path
 from typing import List, Dict, Literal, Optional
-import PIL
 
+import PIL
 import numpy as np
 import transforms3d
 import sapien
-import itertools
-
-from mani_skill.envs.utils import randomization
-from mani_skill.envs.scene import ManiSkillScene
-
-try:
-    from mani_skill.examples.dataset_creation.chatgpt_describer import chatgpt_describer
-except ImportError:
-    print("ChatGPT describer not loaded")
-    chatgpt_describer = None
-
 
 try:
     import trimesh
     import msgpack
 except ImportError:
     print(
-        "Trimesh, msgpack, PIL, not installed, please install it using `pip install trimesh msgpack pillow` if you would want to convert Spok objects to .glb"
+        "Trimesh, msgpack, PIL, not installed, please install it using `pip install trimesh msgpack pillow` if you would want to convert Spoc objects to .glb"
     )
 
-import gzip
-import shutil
-import numpy as np
+from mani_skill.envs.utils import randomization
+from mani_skill.envs.scene import ManiSkillScene
+from mani_skill.examples.cvla.cvla_paths import SPOC_ROOT_PATH, SPOC_DOWNLOAD_URL
+try:
+    from mani_skill.examples.cvla.dataset_creation.chatgpt_describer import chatgpt_describer
+except ImportError:
+    print("ChatGPT describer not loaded")
+    chatgpt_describer = None
 
-OBJAVERSE_ROOT_PATHS: dict = {
-    "MAX": pathlib.Path("/home/argusm/.objaverse/hf-objaverse-v1/"),
-    "NICK": pathlib.Path("/home/nick/Downloads/objaverse"),
-}
-SPOK_ROOT_PATHS: dict = {
-    "MAX": pathlib.Path("/data/lmbraid19/argusm/datasets/spok/r2_dev/"),
-    "NICK": pathlib.Path("/home/heppert/datasets/objaverse/spok/r2_dev/"),
-}
-# TODO Do as in DITTO, i.e. through hostname?
-CURRENT_USER = "MAX"
-
-# TODO Add the objaverse path?
-# import objaverse
-# objaverse.set_base_path(str(objaverse_folder))
-
-get_spok_download_url = (
-    lambda uid: f"https://***REMOVED***.r2.dev/assets/{uid}.tar"
-)
+get_spoc_download_url = lambda uid: SPOC_DOWNLOAD_URL.format(uid)
 
 
 def get_bounding_box_from_dict(box_dict: Dict) -> np.ndarray:
@@ -68,47 +48,47 @@ def get_bounding_box_from_annotation(annotation: Dict) -> np.ndarray:
     )
 
 
-class SpokDatasetBuilder:
+class SpocDatasetBuilder:
 
     def __init__(
         self,
-        spok_root_path=SPOK_ROOT_PATHS[CURRENT_USER],
+        spoc_root_path=SPOC_ROOT_PATH,
         maximum_objects: Optional[int] = None,
         only_downloaded=False,
     ):
         """ """
-        self.spok_root_path = spok_root_path
+        self.spoc_root_path = spoc_root_path
 
         # Only load when needed
-        self._spok_annotations = None
-        self._filtered_spok_annotations = None
+        self._spoc_annotations = None
+        self._filtered_spoc_annotations = None
 
         self.maximum_objects = maximum_objects
         self._only_downloaded = only_downloaded
 
         self._reduced_gpt_descriptions = {}
 
-        # self._spok_filter = lambda
+        # self._spoc_filter = lambda
 
     @property
-    def spok_annotations_path(self):
-        return self.spok_root_path / "annotations.json"
+    def spoc_annotations_path(self):
+        return self.spoc_root_path / "annotations.json"
 
     @property
-    def spok_models_path(self):
-        return self.spok_root_path / "assets"
+    def spoc_models_path(self):
+        return self.spoc_root_path / "assets"
 
     @property
-    def spok_annotations(self) -> Dict:
-        if self._spok_annotations is None:
+    def spoc_annotations(self) -> Dict:
+        if self._spoc_annotations is None:
             print("loading spock annotations, will take a while")
-            with open(self.spok_annotations_path, "rb") as f_obj:
-                self._spok_annotations = json.load(f_obj)
-        return self._spok_annotations
+            with open(self.spoc_annotations_path, "rb") as f_obj:
+                self._spoc_annotations = json.load(f_obj)
+        return self._spoc_annotations
 
     @property
-    def filtered_spok_annotations(self) -> Dict:
-        if self._filtered_spok_annotations is None:
+    def filtered_spoc_annotations(self) -> Dict:
+        if self._filtered_spoc_annotations is None:
             print("filtering spock annotations.")
             # TODO Add the filter as a class/function here?
             def filter_func(annotation: Dict):
@@ -133,41 +113,41 @@ class SpokDatasetBuilder:
 
                 # Check if the object is downloaded
                 if self._only_downloaded:
-                    spok_tar_path = self.spok_models_path / f"{annotation['uid']}.tar"
-                    if not spok_tar_path.exists():
+                    spoc_tar_path = self.spoc_models_path / f"{annotation['uid']}.tar"
+                    if not spoc_tar_path.exists():
                         return False
 
                 return True
 
-            self._filtered_spok_annotations = {
+            self._filtered_spoc_annotations = {
                 key: annotation
-                for key, annotation in self.spok_annotations.items()
+                for key, annotation in self.spoc_annotations.items()
                 if filter_func(annotation)
             }
 
             if (
                 self.maximum_objects
-                and len(self._filtered_spok_annotations) > self.maximum_objects
+                and len(self._filtered_spoc_annotations) > self.maximum_objects
             ):
                 print(
-                    f"Warning: Limiting the number of Spok objects to {self.maximum_objects} of {len(self.spok_annotations)}"
+                    f"Warning: Limiting the number of Spoc objects to {self.maximum_objects} of {len(self.spoc_annotations)}"
                 )
                 # isslice preverses the input order
-                self._filtered_spok_annotations = dict(
+                self._filtered_spoc_annotations = dict(
                     itertools.islice(
-                        self._filtered_spok_annotations.items(), self.maximum_objects
+                        self._filtered_spoc_annotations.items(), self.maximum_objects
                     )
                 )
-                assert len(self._filtered_spok_annotations) == self.maximum_objects
+                assert len(self._filtered_spoc_annotations) == self.maximum_objects
 
-        return self._filtered_spok_annotations
+        return self._filtered_spoc_annotations
 
     def __len__(self):
-        return len(self.filtered_spok_annotations)
+        return len(self.filtered_spoc_annotations)
     
     def sample_uuids(self, num_objects: int = 1, with_replacement=False):
         uuids = randomization.choice(
-            list(self.filtered_spok_annotations.keys()),
+            list(self.filtered_spoc_annotations.keys()),
             num_objects,
             with_replacement=with_replacement,
         )
@@ -184,12 +164,12 @@ class SpokDatasetBuilder:
         return uuids
     
     def get_bbox(self, obj_uuid):
-        annotation = self.spok_annotations[obj_uuid]
+        annotation = self.spoc_annotations[obj_uuid]
         bbox = get_bounding_box_from_annotation(annotation)
         return bbox
 
     def get_object_scale(self, obj_uuid):
-        # Spok Objects are already correctly scaled in meters
+        # Spoc Objects are already correctly scaled in meters
         # global_scale = 1.0
 
         # Default small scale for debugging
@@ -206,55 +186,55 @@ class SpokDatasetBuilder:
 
         return scale
 
-    def get_spok_converted_glb_path(self, obj_uuid, force_regeneration=False):
-        spok_glb_path = self.spok_models_path / obj_uuid / f"{obj_uuid}.glb"
+    def get_spoc_converted_glb_path(self, obj_uuid, force_regeneration=False):
+        spoc_glb_path = self.spoc_models_path / obj_uuid / f"{obj_uuid}.glb"
 
-        if not spok_glb_path.exists() or force_regeneration:
-            self._convert_spok_to_glb(obj_uuid, spok_glb_path)
+        if not spoc_glb_path.exists() or force_regeneration:
+            self._convert_spoc_to_glb(obj_uuid, spoc_glb_path)
 
-        assert spok_glb_path.exists(), f"glb file not found {spok_glb_path}"
-        return spok_glb_path
+        assert spoc_glb_path.exists(), f"glb file not found {spoc_glb_path}"
+        return spoc_glb_path
 
-    def _download_spok(self, obj_uuid) -> type[pathlib.Path | None]:
-        spok_archive_path = (self.spok_models_path / obj_uuid).with_suffix(".tar")
+    def _download_spoc(self, obj_uuid) -> type[pathlib.Path | None]:
+        spoc_archive_path = (self.spoc_models_path / obj_uuid).with_suffix(".tar")
 
-        if not (spok_archive_path.exists() and spok_archive_path.stat().st_size > 8192):
+        if not (spoc_archive_path.exists() and spoc_archive_path.stat().st_size > 8192):
             # Download the archive
             try:
                 response = requests.get(
-                    get_spok_download_url(obj_uuid), stream=True
+                    get_spoc_download_url(obj_uuid), stream=True
                 )  # Use streaming for large files
                 response.raise_for_status()  # Raise an exception for HTTP errors
             except requests.exceptions.HTTPError as e:
                 print(f"HTTP error occurred {e = } when downloading {obj_uuid}")
                 return
 
-            with spok_archive_path.open("wb") as file:
+            with spoc_archive_path.open("wb") as file:
                 for chunk in response.iter_content(chunk_size=8192):  # Write in chunks
                     file.write(chunk)
 
         # Check if the archive was already unpacked
-        spok_obj_dir = self.spok_models_path / obj_uuid
-        if not spok_obj_dir.exists():
+        spoc_obj_dir = self.spoc_models_path / obj_uuid
+        if not spoc_obj_dir.exists():
             # Unpack the full-archive
-            with tarfile.open(spok_archive_path, "r") as tar:
-                tar.extractall(self.spok_models_path)
+            with tarfile.open(spoc_archive_path, "r") as tar:
+                tar.extractall(self.spoc_models_path)
 
             # Unpack the msgpack
-            msgpack_path = spok_obj_dir / f"{obj_uuid}"
+            msgpack_path = spoc_obj_dir / f"{obj_uuid}"
             with gzip.open(msgpack_path.with_suffix(".msgpack.gz"), "rb") as f_in:
                 with open(msgpack_path.with_suffix(".msgpack"), "wb") as f_out:
                     shutil.copyfileobj(f_in, f_out)
 
             # TODO Unpack annotations?
 
-        return spok_obj_dir
+        return spoc_obj_dir
 
-    def get_trimesh_from_spok(self, obj_uuid, warn=False):
-        spok_obj_path = self._download_spok(obj_uuid)
+    def get_trimesh_from_spoc(self, obj_uuid, warn=False):
+        spoc_obj_path = Path(self._download_spoc(obj_uuid))
 
         # TODO Fix me?
-        msg_path = spok_obj_path / f"{obj_uuid}.msgpack"
+        msg_path = spoc_obj_path / f"{obj_uuid}.msgpack"
         with open(msg_path, "rb") as data_file:
             byte_data = data_file.read()
         data_loaded = msgpack.unpackb(byte_data)
@@ -277,14 +257,14 @@ class SpokDatasetBuilder:
         )
         uvs_np = np.array([list(vertex.values()) for vertex in data_loaded["uvs"]])
 
-        albedo_img = PIL.Image.open(spok_obj_path / data_loaded["albedoTexturePath"])
+        albedo_img = PIL.Image.open(spoc_obj_path / data_loaded["albedoTexturePath"])
         emission_img = PIL.Image.open(
-            spok_obj_path / data_loaded["emissionTexturePath"]
+            spoc_obj_path / data_loaded["emissionTexturePath"]
         )
         metallic_smoothnes_img = PIL.Image.open(
-            spok_obj_path / data_loaded["metallicSmoothnessTexturePath"]
+            spoc_obj_path / data_loaded["metallicSmoothnessTexturePath"]
         )
-        normals_img = PIL.Image.open(spok_obj_path / data_loaded["normalTexturePath"])
+        normals_img = PIL.Image.open(spoc_obj_path / data_loaded["normalTexturePath"])
 
         # random_color_visual = trimesh.visual.ColorVisuals(vertex_colors=np.random.rand(vertices_np.shape[0], 4))
 
@@ -312,27 +292,27 @@ class SpokDatasetBuilder:
 
         return mesh
 
-    def _convert_spok_to_glb(self, obj_uuid, spok_glb_path):
-        _ = self._download_spok(obj_uuid)
-        trimesh_mesh = self.get_trimesh_from_spok(obj_uuid)
-        trimesh_mesh.export(spok_glb_path)
+    def _convert_spoc_to_glb(self, obj_uuid, spoc_glb_path):
+        _ = self._download_spoc(obj_uuid)
+        trimesh_mesh = self.get_trimesh_from_spoc(obj_uuid)
+        trimesh_mesh.export(spoc_glb_path)
 
-    def get_spok_descriptions(self, obj_uuid):
-        spok_annotation = self.spok_annotations[obj_uuid]
+    def get_spoc_descriptions(self, obj_uuid):
+        spoc_annotation = self.spoc_annotations[obj_uuid]
         descriptions = [
-            value for key, value in spok_annotation.items() if "description" in key
+            value for key, value in spoc_annotation.items() if "description" in key
         ]
         return descriptions
 
     def get_condensed_gpt_description(self, obj_uuid, recreate=False):
-        descriptions = self.get_spok_descriptions(obj_uuid)
+        descriptions = self.get_spoc_descriptions(obj_uuid)
         
         if obj_uuid in self._reduced_gpt_descriptions:
             return self._reduced_gpt_descriptions[obj_uuid]
 
         # TODO Check if already saved --> load from file
         chatgpt_description_path = (
-            self.spok_models_path / obj_uuid / "chatgpt_description.json"
+            self.spoc_models_path / obj_uuid / "chatgpt_description.json"
         )
         if chatgpt_description_path.exists() and not recreate:
             with chatgpt_description_path.open("r") as f_obj:
@@ -363,16 +343,16 @@ class SpokDatasetBuilder:
         ]
 
     def get_object_name(self, obj_uuid):
-        return self.spok_annotations[obj_uuid]["category"]
+        return self.spoc_annotations[obj_uuid]["category"]
 
 
-class SpokDatasetBuilderFast(SpokDatasetBuilder):
-    def __init__(self, spok_root_path = SPOK_ROOT_PATHS[CURRENT_USER],
-                 annotation_file = SPOK_ROOT_PATHS[CURRENT_USER] / "clip_description2.jsonl",
+class SpocDatasetBuilderFast(SpocDatasetBuilder):
+    def __init__(self, spoc_root_path = SPOC_ROOT_PATH,
+                 annotation_file = SPOC_ROOT_PATH / "clip_description2.jsonl",
                  maximum_objects = None):
         
-        # do this to get files, but try not to call anything that requires loading spok annotations, otherwise it takes long
-        super().__init__(spok_root_path)
+        # do this to get files, but try not to call anything that requires loading spoc annotations, otherwise it takes long
+        super().__init__(spoc_root_path)
 
         self.clip_annotation_data = {}
         uuids_seen = set()
@@ -414,7 +394,7 @@ class SpokDatasetBuilderFast(SpokDatasetBuilder):
                     break
 
     @property
-    def spok_annotations(self) -> Dict:
+    def spoc_annotations(self) -> Dict:
         raise ValueError("You can commet this error out if you want.")
 
     def get_object_scale(self, obj_uuid):
@@ -450,12 +430,12 @@ class SpokDatasetBuilderFast(SpokDatasetBuilder):
 
 
 # Specific for Maniskill --> TODO: Refactor into somewhere else when there is time
-def get_spok_builder(
+def get_spoc_builder(
     scene: ManiSkillScene,
     uuid,
     add_collision=True,
     add_visual=True,
-    spok_dataset:SpokDatasetBuilder = None
+    spoc_dataset:SpocDatasetBuilder = None
 ):
     # We need to rotate the object around z to make it upright?
     obj_q = transforms3d.quaternions.axangle2quat(
@@ -467,13 +447,13 @@ def get_spok_builder(
     builder = scene.create_actor_builder()
     builder.initial_pose = sapien.Pose(p=[0, 0, 0.02], q=[1, 0, 0, 0])
 
-    scale = spok_dataset.get_object_scale(uuid)
+    scale = spoc_dataset.get_object_scale(uuid)
 
     # TODO Set these?
     density = 1000
     # physical_material = None
 
-    glb_path = str(spok_dataset.get_spok_converted_glb_path(uuid))
+    glb_path = str(spoc_dataset.get_spoc_converted_glb_path(uuid))
 
     if add_collision:
         collision_file = glb_path
@@ -495,9 +475,9 @@ def get_spok_builder(
     return builder
 
 if __name__ == "__main__":
-    SpokDataset = SpokDatasetBuilder(
-        spok_root_path=SPOK_ROOT_PATHS[CURRENT_USER],
+    SpocDataset = SpocDatasetBuilder(
+        spoc_root_path=SPOC_ROOT_PATH,
         # maximum_objects=100,
         # only_downloaded=True,  # For debug purposes useful
     )
-    print(f"Loadable {len(SpokDataset)} Spok Objects")
+    print(f"Loadable {len(SpocDataset)} Spoc Objects")

@@ -8,6 +8,8 @@ import tyro
 import h5py
 from tqdm import tqdm
 
+from mani_skill.examples.cvla.cvla_paths import CVLA_DATASETS_PATH
+
 
 def get_latest_h5(directory):
     """Find the most recent .h5 file in the given directory."""
@@ -42,10 +44,10 @@ def merge_h5_files(directories, output_file):
 
 @dataclass
 class Args:
-    root_dir: Annotated[str, tyro.conf.arg(aliases=["--root_dir"])] = "/tmp/cvla-1"
+    root_dir: Annotated[str, tyro.conf.arg(aliases=["--root_dir"])] = "/tmp/cvla-tmp"
     """The root directory to merge"""
 
-    datasets_dir: Annotated[str, tyro.conf.arg(aliases=["--datasets_dir"])] = "/data/lmbraid19/argusm/datasets"
+    datasets_dir: Annotated[str, tyro.conf.arg(aliases=["--datasets_dir"])] = str(CVLA_DATASETS_PATH)
     """Where to put the merged data"""
     
 

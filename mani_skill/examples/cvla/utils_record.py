@@ -37,7 +37,7 @@ def downcast_seg_array(env):
     except KeyError:
         pass
 
-def check_object_pixels(seg_image, obs_scene, N_percent, return_percent=False) ->  Union[bool, Tuple[bool, Dict]]:
+def check_object_pixels(seg_image, obs_scene, N_percent, return_percent=False) ->  Tuple[bool, Dict]:
     """
     Checks if each relevant object in obs_scene has at least N% of the image pixels.
     Uses np.unique for efficiency.
@@ -50,6 +50,7 @@ def check_object_pixels(seg_image, obs_scene, N_percent, return_percent=False) -
     Returns:
     - bool: True if all relevant objects have at least N% of total pixels, False otherwise.
     """
+    assert return_percent == True
     object_info = obs_scene.get('object_info', {})
     total_pixels = seg_image.size
 
@@ -63,18 +64,10 @@ def check_object_pixels(seg_image, obs_scene, N_percent, return_percent=False) -
     unique_ids, counts = np.unique(seg_image, return_counts=True)
     id_to_percent = dict(zip(unique_ids, counts / total_pixels * 100))
 
-    # Check if all relevant IDs meet the percentage threshold
-    all_true = True
-    for obj_id in relevant_ids:
-        if id_to_percent.get(obj_id, 0) < N_percent:
-            all_true = False
-            break
-
-    if return_percent:
-        return all_true, id_to_percent
-    else:
-        return all_true
-
+    vis_percent = [id_to_percent.get(obj_id, 0) for obj_id in relevant_ids]
+    all_true = bool(np.all([x > N_percent for x in vis_percent]))
+    return all_true, id_to_percent
+    
 def apply_check_object_pixels(env, N_percent):
     """
     Applies check_object_pixels to each observation in the environment's trajectory buffer.
@@ -106,4 +99,6 @@ def apply_check_object_pixels_obs(observation, env, N_percent):
     assert seg_image.ndim == 3
     assert seg_image.shape[2] == 1  # one channel
     obs_scene = env.unwrapped.get_obs_scene()
-    return check_object_pixels(seg_image, obs_scene, N_percent)
+    are_visible, id_to_percent = check_object_pixels(seg_image, obs_scene, N_percent, return_percent=True)
+    env.unwrapped.seg_id_to_initial_frame_percent = id_to_percent
+    return are_visible
