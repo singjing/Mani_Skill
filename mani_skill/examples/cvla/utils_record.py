@@ -1,7 +1,7 @@
 import numpy as np
-from copy import deepcopy
 import subprocess
-from typing import Union, Tuple, Dict
+from typing import Tuple, Dict
+
 
 def get_git_commit_hash() -> str:
     """Returns the current git commit hash as a string."""
@@ -14,6 +14,7 @@ def get_git_commit_hash() -> str:
     except subprocess.CalledProcessError:
         raise RuntimeError("Failed to get git commit hash.")
 
+
 def check_no_uncommitted_changes():
     """Raises an error if there are uncommitted changes in the repo."""
     try:
@@ -25,7 +26,6 @@ def check_no_uncommitted_changes():
             raise RuntimeError("Uncommitted changes detected. Please commit or stash before proceeding.")
     except subprocess.CalledProcessError:
         raise RuntimeError("Failed to check git status.")
-    
 
 
 def downcast_seg_array(env):
@@ -37,7 +37,8 @@ def downcast_seg_array(env):
     except KeyError:
         pass
 
-def check_object_pixels(seg_image, obs_scene, N_percent, return_percent=False) ->  Tuple[bool, Dict]:
+
+def check_object_pixels(seg_image, obs_scene, N_percent, return_percent=False) -> Tuple[bool, Dict]:
     """
     Checks if each relevant object in obs_scene has at least N% of the image pixels.
     Uses np.unique for efficiency.
@@ -50,13 +51,13 @@ def check_object_pixels(seg_image, obs_scene, N_percent, return_percent=False) -
     Returns:
     - bool: True if all relevant objects have at least N% of total pixels, False otherwise.
     """
-    assert return_percent == True
+    assert return_percent
     object_info = obs_scene.get('object_info', {})
     total_pixels = seg_image.size
 
     # Filter relevant object IDs (ignore ground/table and relevance != 1)
     relevant_ids = {
-        cur_info['seg_id'] for obj_name, cur_info in object_info.items() 
+        cur_info['seg_id'] for obj_name, cur_info in object_info.items()
         if cur_info['task_req'] == 1 and obj_name not in ['ground', 'table-workspace']
     }
 
@@ -67,7 +68,8 @@ def check_object_pixels(seg_image, obs_scene, N_percent, return_percent=False) -
     vis_percent = [id_to_percent.get(obj_id, 0) for obj_id in relevant_ids]
     all_true = bool(np.all([x > N_percent for x in vis_percent]))
     return all_true, id_to_percent
-    
+
+
 def apply_check_object_pixels(env, N_percent):
     """
     Applies check_object_pixels to each observation in the environment's trajectory buffer.
@@ -77,8 +79,6 @@ def apply_check_object_pixels(env, N_percent):
 
     env_id = 0
     frame_id = 0  # we check the first frame for visibility of objects
-    #from pdb import set_trace
-    #set_trace()
     seg_image = env._trajectory_buffer.observation['sensor_data']['render_camera']['segmentation'][env_id, frame_id]
     assert seg_image.ndim == 3
     assert seg_image.shape[2] == 1  # one channel
@@ -88,6 +88,7 @@ def apply_check_object_pixels(env, N_percent):
     # move data around, so that we can all get_obs_scene in Recorder
     env.unwrapped.seg_id_to_initial_frame_percent = id_to_percent
     return are_visible
+
 
 def apply_check_object_pixels_obs(observation, env, N_percent):
     """

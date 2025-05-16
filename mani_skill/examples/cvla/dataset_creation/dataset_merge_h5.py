@@ -23,8 +23,7 @@ def get_latest_h5(directory):
 
 def merge_h5_files(directories, output_file):
     """Merge the latest .h5 files from each directory into one, maintaining traj order."""
-    all_trajs = []
-    traj_offset = 0  # To ensure continuous indexing    
+    traj_offset = 0  # To ensure continuous indexing
     with h5py.File(output_file, 'w') as out_h5:
         for directory in tqdm(directories, desc="dirs", total=len(directories)):
             for h5_fn in tqdm(get_latest_h5(directory)):
@@ -38,7 +37,7 @@ def merge_h5_files(directories, output_file):
                         new_traj_key = f"traj_{traj_offset}"
                         h5_file.copy(key, out_h5, name=new_traj_key)
                         traj_offset += 1  # Increment to maintain unique indices
-    
+
     print(f"Merged {traj_offset} trajectories into {output_file}")
 
 
@@ -49,7 +48,7 @@ class Args:
 
     datasets_dir: Annotated[str, tyro.conf.arg(aliases=["--datasets_dir"])] = str(CVLA_DATASETS_PATH)
     """Where to put the merged data"""
-    
+
 
 if __name__ == "__main__":
     import shutil
@@ -61,10 +60,10 @@ if __name__ == "__main__":
     print("source:", root_dir)
 
     print("\ncomponets:")
-    p_dirs = sorted([root_dir /  d for d in root_dir.iterdir() if (root_dir /  d).is_dir()])    
+    p_dirs = sorted([root_dir / d for d in root_dir.iterdir() if (root_dir / d).is_dir()])
     for i in p_dirs:
         print("\t", i)
-    
+
     reference_h5 = get_latest_h5(p_dirs[0])[0]
     out_fn = root_dir / reference_h5.name
     print("\n5_file", out_fn)
@@ -74,20 +73,18 @@ if __name__ == "__main__":
     dest_json = out_fn.with_suffix('.json')
     print("json_file", dest_json)
     shutil.copyfile(source_json, dest_json)  # copy json file to destination
-    
+
     # Merge into output.h5
     merge_h5_files(p_dirs, out_fn)
 
-    
     old_dir = Path(root_dir)
     old_dir = root_dir.with_name(root_dir.name + '_old')
     print("moving " + str(p_dirs[0]) + " to " + str(old_dir), '...')
     for p in tqdm(p_dirs):
         shutil.move(p, old_dir / p.name)
-    
+
     datasets_dir = parsed_args.datasets_dir
     cmd = f"rsync -a --progress {root_dir} {datasets_dir}"
     print("\n" + cmd)
     subprocess.run(cmd, shell=True)
     print("done.")
-    

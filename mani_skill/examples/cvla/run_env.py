@@ -1,10 +1,5 @@
 """
-Option 1: record inital frames:
-python run_env.py
-python run_env.py -od objaverse
-
-Option 2: record trajectories (e.g. with rt shader)
-python run_env.py --record_dir /tmp/cvla-test --N_samples=10
+Main entry point for running the CVLA environment. See readme for details.
 """
 import os
 import json
@@ -24,21 +19,23 @@ import gymnasium as gym
 import sapien
 
 from mani_skill.utils.structs import Pose
-from mani_skill.utils.wrappers import RecordEpisode        
+from mani_skill.utils.wrappers import RecordEpisode
 import mani_skill.examples.cvla.cvla_env  # do import to register env, not used otherwise
 from mani_skill.examples.cvla.utils_trajectory import generate_curve_torch, DummyCamera
 from mani_skill.examples.cvla.utils_traj_tokens import getActionEncInstance, to_prefix_suffix
 from mani_skill.examples.cvla.utils_record import apply_check_object_pixels_obs
-from pdb import set_trace
+from mani_skill.examples.cvla.utils_record import downcast_seg_array
 
 import gc
 import torch
 
 
 RAND_MAX = 2**32 - 1
-SAVE_FREQ = 1
-RESET_HARD = 10
-SAVE_VIDEO = False
+SAVE_FREQ = 1  # save after every reset
+RESET_HARD = 10  # re-start environment after every n steps
+SAVE_VIDEO = False  # save videos
+# minimum percentage of image that must be object, set to None to disable checking
+MIN_OBJ_VISIBLE_PERCENT = 0.5
 
 
 def getMotionPlanner(env):
@@ -119,13 +116,10 @@ class Args:
 def reset_random(args, orig_seeds):
     if orig_seeds is None:
         seed = random.randrange(RAND_MAX)
-        #print("Random seed", seed)
     elif isinstance(orig_seeds, list):
         seed = orig_seeds.pop()
-        #print("Popping seed", seed)
     elif isinstance(orig_seeds, int):
         seed = orig_seeds
-        #print("Using seed", seed)        
     else:
         raise ValueError
     args.seed = [seed]
@@ -158,19 +152,19 @@ def iterate_env(args: Args, vis=True, model=None):
             parallel_in_single_scene=parallel_in_single_scene,
             robot_uids=args.robot_uids,
             scene_dataset=args.scene_dataset,
-            object_dataset=args.object_dataset, 
+            object_dataset=args.object_dataset,
             camera_views=args.camera_views,
             scene_options=args.scene_options,
-            #camera_cfgs={"use_stereo_depth": True, },
+            # camera_cfgs={"use_stereo_depth": True, },
             # **args.env_kwargs
         )
         if args.record_dir:
-            env = RecordEpisode(env, args.record_dir, info_on_video=False, 
+            env = RecordEpisode(env, args.record_dir, info_on_video=False,
                                 save_trajectory=True, max_steps_per_video=env._max_episode_steps,
                                 save_on_reset=SAVE_FREQ == 1,
                                 record_env_state=True)
         return env
-    
+
     env = make_env()
 
     if verbose:
@@ -208,8 +202,11 @@ def iterate_env(args: Args, vis=True, model=None):
             torch.cuda.empty_cache()
             continue
 
-        are_vis = apply_check_object_pixels_obs(obs, env, N_percent=0.5)
-        if are_vis == False:
+        if MIN_OBJ_VISIBLE_PERCENT is None:
+            obj_are_vis = True
+        else:
+            obj_are_vis = apply_check_object_pixels_obs(obs, env, N_percent=MIN_OBJ_VISIBLE_PERCENT)
+        if not obj_are_vis:
             print("Warning: object not visible, skipping sample")
             gc.collect()
             torch.cuda.empty_cache()
@@ -218,9 +215,9 @@ def iterate_env(args: Args, vis=True, model=None):
         # Note: when using RecordEpisode this will create 20x the number of saved frames
         # so 75GB -> 1.5 TB, which is no good.
         # Let the objects settle (!)
-        #for _ in range(20):
+        # for _ in range(20):
         #    _ = env.step(obs["agent"]["qpos"][..., :8])
-    
+
         if args.seed is not None:
             env.action_space.seed(args.seed[0])
         if vis and args.render_mode is not None:
@@ -231,12 +228,13 @@ def iterate_env(args: Args, vis=True, model=None):
         else:
             env.render()
 
-        env_idx = 0
-        
-        #-----
+        # Not parrelized
+        # env_idx = 0
+
+        # -----
         # Warning, taking an image form obs/rendering it results in different calibrations!
         # e.g. images = env.base_env.scene.get_human_render_camera_images('render_camera')
-        #-----
+        # -----
         obj_start = Pose(obs["extra"]["obj_start"].clone().detach())
         obj_end = Pose(obs["extra"]["obj_end"].clone().detach())
         grasp_pose = Pose(obs["extra"]["grasp_pose"].clone().detach())
@@ -276,7 +274,7 @@ def iterate_env(args: Args, vis=True, model=None):
                          seed=args.seed[0],
                          iter_reached=i,
                          )
-        
+
         encode_decode_trajectory = True
         if encode_decode_trajectory:
             curve_3d_est, orns_3d_est = dec_func(token_str, camera, robot_pose=robot_pose)
@@ -288,9 +286,9 @@ def iterate_env(args: Args, vis=True, model=None):
             assert args.control_mode == "pd_joint_pos"
             if verbose and info["didclip_traj"]:
                 print("Warning refered object out of camera view.")
-                
+
             if model:
-                img_out, text, label, token_pred = model.make_predictions(image_before, prefix)
+                _, _, _, token_pred = model.make_predictions(image_before, prefix)
                 json_dict["prediction"] = token_pred
                 if token_pred == "" or token_pred is None:
                     print("Warning: empty prediction, failing")
@@ -322,14 +320,14 @@ def iterate_env(args: Args, vis=True, model=None):
                 yield image_before, json_dict, args.seed[0]
                 N_valid_samples += 1
                 continue
-            
+
             # convert two keypoints into motion sequence
             _, curve_3d_i = generate_curve_torch(curve_3d[:, 0], curve_3d[:, -1], num_points=3)
             grasp_pose = Pose.create_from_pq(p=curve_3d[:, 0], q=orns_3d[:, 0])
-            reach_pose = grasp_pose * sapien.Pose([0, 0, -0.10]) # Go above the object before grasping
+            reach_pose = grasp_pose * sapien.Pose([0, 0, -0.10])  # Go above the object before grasping
             lift_pose = Pose.create_from_pq(p=curve_3d_i[:, 1], q=orns_3d[:, 1])
             align_pose = Pose.create_from_pq(p=curve_3d_i[:, 2], q=orns_3d[:, 1])
-            pre_align_pose = align_pose * sapien.Pose([0, 0, -0.10]) # Go above before dropping
+            pre_align_pose = align_pose * sapien.Pose([0, 0, -0.10])  # Go above before dropping
 
             # execute motion sequence using IK solver
             RobotArmMotionPlanningSolver = getMotionPlanner(env)
@@ -341,15 +339,15 @@ def iterate_env(args: Args, vis=True, model=None):
                 visualize_target_grasp_pose=vis,
                 print_env_info=False,
             )
-            
+
             planner.move_to_pose_with_screw(reach_pose)
             planner.move_to_pose_with_screw(grasp_pose)
-            #run_interactive(env)
+            # run_interactive(env)
             planner.close_gripper()
             planner.move_to_pose_with_screw(lift_pose)
             planner.move_to_pose_with_screw(pre_align_pose)
             planner.move_to_pose_with_screw(align_pose)
-            #run_interactive(env)
+            # run_interactive(env)
             planner.open_gripper()
             final_reward = env.unwrapped.eval_reward()[0]
             planner.close()
@@ -366,29 +364,15 @@ def iterate_env(args: Args, vis=True, model=None):
             raise ValueError
 
         if args.record_dir:
-            from mani_skill.examples.cvla.utils_record import downcast_seg_array, apply_check_object_pixels
-            downcast_seg_array(env)
-            try:
-                are_vis = apply_check_object_pixels(env, N_percent=0.25)
-            except KeyError:
-                print("Warning: missing segmentation, can't filter episode")
-                are_vis = True
-
-            #if i % SAVE_FREQ == 0:
+            # if i % SAVE_FREQ == 0:
             # keep the transition from reset (which does not have an action)
 
-            record_visible = True
-            if record_visible:
-                if are_vis:
-                    env.flush_trajectory(save=True, ignore_empty_transition=False)
-                else:
-                    env.flush_trajectory(save=False)
-                    continue  # sample was not valid
-            else:
-                env.flush_trajectory(save=True, ignore_empty_transition=False)
+            downcast_seg_array(env)
+            env.flush_trajectory(save=True, ignore_empty_transition=False)
+            # to skip saving do: env.flush_trajectory(save=False)
 
             if SAVE_VIDEO:
-                video_name =  f"CLEVR_{str(args.seed[0]).zfill(10)}"
+                video_name = f"CLEVR_{str(args.seed[0]).zfill(10)}"
                 env.flush_video(name=video_name, save=True)
 
         del obs
@@ -397,7 +381,7 @@ def iterate_env(args: Args, vis=True, model=None):
         yield image_before, json_dict, args.seed[0]
 
         N_valid_samples += 1
-        
+
     env.close()
 
 
@@ -422,64 +406,64 @@ def run_iteration(parsed_args, N_samples, process_num=None, progress_bar=None):
 
 
 def save_multiproces(parsed_args, N_samples, N_processes=10):
-        from mani_skill.examples.cvla.utils_record import check_no_uncommitted_changes, get_git_commit_hash
-        parsed_args.run_mode = "first"
-        dataset_path = Path(parsed_args.record_dir)
-        os.makedirs(dataset_path, exist_ok=True)
+    from mani_skill.examples.cvla.utils_record import check_no_uncommitted_changes, get_git_commit_hash
+    parsed_args.run_mode = "first"
+    dataset_path = Path(parsed_args.record_dir)
+    os.makedirs(dataset_path, exist_ok=True)
 
-        # save command line arguments in nice format
-        if N_samples  > 100:
-            check_no_uncommitted_changes()
-        commit_hash = get_git_commit_hash()
-        with open(dataset_path / "args.txt", "w") as f:
-            f.write(f"git_commit: {commit_hash}\n")
-            for arg in vars(parsed_args):
-                f.write(f"{arg}: {getattr(parsed_args, arg)}\n")
+    # save command line arguments in nice format
+    if N_samples > 100:
+        check_no_uncommitted_changes()
+    commit_hash = get_git_commit_hash()
+    with open(dataset_path / "args.txt", "w") as f:
+        f.write(f"git_commit: {commit_hash}\n")
+        for arg in vars(parsed_args):
+            f.write(f"{arg}: {getattr(parsed_args, arg)}\n")
 
-        # set random seeds, be careful to not copy same seeds between processes
-        if N_processes > 1:
-            assert parsed_args.seed == None
-        if isinstance(parsed_args.seed, int):
-            assert N_processes == 1
-            rng = np.random.default_rng(parsed_args.seed)
-            parsed_args.seed = rng.integers(0, RAND_MAX, N_samples).tolist()
-        
-        # don't multiprocess
-        if N_processes == 1:
-            # don't set N_samples in iterate_env, so that e.g. re-generate can work for visibility
-            env_iter = iterate_env(parsed_args, vis=False)  
-            for _ in tqdm(range(N_samples)):
-                try:
-                    _ = next(env_iter)
-                except StopIteration:
-                    break 
-        else:
-            samples_per_process = N_samples // N_processes
-            progress_bar = multiprocessing.Value("i", 0)  
-            
-            tasks = []
-            for p_num in range(N_processes):
-                dataset_path_p = Path(dataset_path) / f"p{p_num}"
-                os.makedirs(dataset_path_p, exist_ok=True)
-                args_copy = deepcopy(parsed_args)
-                args_copy.record_dir = dataset_path_p
-                p = multiprocessing.Process(target=run_iteration, args=(args_copy, samples_per_process, p_num, progress_bar), name=f"Worker-{p_num+1}")
-                tasks.append(p)
-                p.start()
-                time.sleep(1.1)  # Give some time for processes to start
+    # set random seeds, be careful to not copy same seeds between processes
+    if N_processes > 1:
+        assert parsed_args.seed is None
+    if isinstance(parsed_args.seed, int):
+        assert N_processes == 1
+        rng = np.random.default_rng(parsed_args.seed)
+        parsed_args.seed = rng.integers(0, RAND_MAX, N_samples).tolist()
 
-            # Display tqdm progress in the main process
-            with tqdm(total=N_samples, desc="Total Progress", position=0, leave=True) as pbar:
-                last_count = 0
-                while any(p.is_alive() for p in tasks):  # Update while processes are running
-                    current_count = progress_bar.value
-                    pbar.update(current_count - last_count)  # Update tqdm only for new progress
-                    last_count = current_count
-                    time.sleep(1)  # Prevents excessive updates
-            
-            #await asyncio.gather(*tasks)
-            for p in tasks:
-                p.join()  # Wait for all processes to finish
+    # don't multiprocess
+    if N_processes == 1:
+        # don't set N_samples in iterate_env, so that e.g. re-generate can work for visibility
+        env_iter = iterate_env(parsed_args, vis=False)
+        for _ in tqdm(range(N_samples)):
+            try:
+                _ = next(env_iter)
+            except StopIteration:
+                break
+    else:
+        samples_per_process = N_samples // N_processes
+        progress_bar = multiprocessing.Value("i", 0)
+
+        tasks = []
+        for p_num in range(N_processes):
+            dataset_path_p = Path(dataset_path) / f"p{p_num}"
+            os.makedirs(dataset_path_p, exist_ok=True)
+            args_copy = deepcopy(parsed_args)
+            args_copy.record_dir = dataset_path_p
+            p = multiprocessing.Process(target=run_iteration, args=(args_copy, samples_per_process, p_num, progress_bar), name=f"Worker-{p_num+1}")
+            tasks.append(p)
+            p.start()
+            time.sleep(1.1)  # Give some time for processes to start
+
+        # Display tqdm progress in the main process
+        with tqdm(total=N_samples, desc="Total Progress", position=0, leave=True) as pbar:
+            last_count = 0
+            while any(p.is_alive() for p in tasks):  # Update while processes are running
+                current_count = progress_bar.value
+                pbar.update(current_count - last_count)  # Update tqdm only for new progress
+                last_count = current_count
+                time.sleep(1)  # Prevents excessive updates
+
+        # await asyncio.gather(*tasks)
+        for p in tasks:
+            p.join()  # Wait for all processes to finish
 
 
 if __name__ == "__main__":
@@ -487,7 +471,6 @@ if __name__ == "__main__":
     dataset_path = parsed_args.record_dir
 
     if isinstance(parsed_args.seed, str):
-        import json
         with open(parsed_args.seed, "r") as f_obj:
             seeds = json.load(f_obj)
             parsed_args.seed = seeds
@@ -497,12 +480,12 @@ if __name__ == "__main__":
         while True:
             _ = next(env_iter)
     else:
-        #asyncio.run(save_multiproces(parsed_args, N_samples))
+        # asyncio.run(save_multiproces(parsed_args, N_samples))
         N_processes = 1
         if parsed_args.N_samples > 100:
             if parsed_args.object_dataset == "clevr":
                 N_processes = 10
             else:
                 N_processes = 5
-            
+
         save_multiproces(parsed_args, parsed_args.N_samples, N_processes=N_processes)

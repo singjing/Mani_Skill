@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import sapien.physx as physx
-from mani_skill.utils.common import quat_multiply
 from mani_skill.utils.structs import Pose
 from mani_skill.utils.structs import Actor
 from mani_skill.utils.geometry.trimesh_utils import get_component_mesh
@@ -35,7 +34,7 @@ def move_object_onto(env, pretend=False):
     obj_start_pose = objects[object_id_move].pose
     pose_base = objects[object_id_base].pose
     # Pose.create creates a reference
-    obj_end_pose = Pose.create_from_pq(p=obj_start_pose.get_p(), q=obj_start_pose.get_q())    
+    obj_end_pose = Pose.create_from_pq(p=obj_start_pose.get_p(), q=obj_start_pose.get_q())
     pos_new = obj_start_pose.get_p().clone().detach()  # don't forget
     pos_base = pose_base.get_p()
     pos_new[:, 0:2] = pos_base[:, 0:2]
@@ -44,12 +43,12 @@ def move_object_onto(env, pretend=False):
         # primitive shapes have origin in center
         meshA = get_actor_mesh(env.cubeA, to_world_frame=True)
         meshB = get_actor_mesh(env.cubeB, to_world_frame=True)
-        height = float(meshB.vertices[:,2].max() + (meshA.vertices[:,2].max() - meshA.vertices[:,2].min())/2)
+        height = float(meshB.vertices[:, 2].max() + (meshA.vertices[:, 2].max() - meshA.vertices[:, 2].min()) / 2)
     else:
         # meshes (should) have origin at bottom
         meshB = get_actor_mesh(env.cubeB, to_world_frame=True)
         height = float(meshB.vertices[:, 2].max())
-    
+
     pos_new[:, 2] = height
 
     # debug_marker = False
@@ -58,13 +57,13 @@ def move_object_onto(env, pretend=False):
     #     builder = env.scene.create_actor_builder()
     #     builder.add_sphere_visual(pose=sapien.Pose(p=[pos_base[0][0], pos_base[0][1], height]), radius=.02, material=sapien.render.RenderMaterial(base_color=[0., 1., 0., 1.]))
     #     marker_visual = builder.build_kinematic(name="marker_visual")
-    
+
     obj_end_pose.set_p(pos_new)
 
     if not pretend:
         print("trying to move.")
         objects[object_id_move].set_pose(obj_end_pose)
-        
+
     # now creat a text
     text_names = env.object_names
     verb = "move"
@@ -145,7 +144,6 @@ def move_object_leftrightbehind(env, direction="left", pretend=False, offset=0.1
         print("Warning: not enough unique objects")
         object_id_move, object_id_base = np.random.choice(range(len(objects)), 2, replace=False)
 
-
     camera_config = env.render_camera_config
     output = parse_camera_configs(camera_config)
     camera_pose = output["render_camera"].pose
@@ -157,13 +155,12 @@ def move_object_leftrightbehind(env, direction="left", pretend=False, offset=0.1
     # Create a copy of the object's pose for the end position
     obj_end_pose = Pose.create_from_pq(p=obj_start_pose.get_p(), q=obj_start_pose.get_q())
 
-
     # Compute the direction from the camera to the base object
     base_position = pose_base.get_p()
     cam_pos = camera_pose.get_p()
 
     adjusted_cam_pos = cam_pos.clone()
-    adjusted_cam_pos [:, 2] = base_position [:, 2]
+    adjusted_cam_pos[:, 2] = base_position[:, 2]
 
     direction_vector = base_position - adjusted_cam_pos
 
@@ -196,7 +193,6 @@ def move_object_leftrightbehind(env, direction="left", pretend=False, offset=0.1
     pos_new[:, :3] = new_position
     obj_end_pose.set_p(pos_new)
 
-
     if not pretend:
         print("trying to move.")
         objects[object_id_move].set_pose(obj_end_pose)
@@ -204,26 +200,24 @@ def move_object_leftrightbehind(env, direction="left", pretend=False, offset=0.1
     env.cubeA = objects[object_id_move]
     env.cubeB = objects[object_id_base]
 
-
     # now create a text
     text_names = env.object_names
     verb = "move"
-    prep = {
-        "behind" : "behind",
-        "left" : "to the left of",
-        "right" : "to the right of"
-        }
+    prep = {"behind": "behind",
+            "left": "to the left of",
+            "right": "to the right of"
+            }
     prepfinal = prep[direction]
     action_text = f"{verb} {text_names[object_id_move]} {prepfinal} {text_names[object_id_base]}"
     print(action_text)
     return obj_start_pose, obj_end_pose, action_text
+
 
 def move_object_between(env, pretend=False):
     # Move cubeA next to cubeB
     env = env.unwrapped
     objects = env.objects
     assert len(objects) >= 3
-
 
     options = np.where(env.objects_unique)[0]
     if len(options) >= 3:
@@ -271,7 +265,8 @@ def move_object_between(env, pretend=False):
 
     return obj_start_pose, obj_end_pose, action_text
 
-def move_object_rotate_x(env, pretend=False, rotation = "anticlockwise", rotation_angle_deg=120):
+
+def move_object_rotate_x(env, pretend=False, rotation="anticlockwise", rotation_angle_deg=120):
     # Move cubeA and rotate it along the x-axis by `rotation_angle_deg`
     env = env.unwrapped
     objects = env.objects
@@ -285,11 +280,10 @@ def move_object_rotate_x(env, pretend=False, rotation = "anticlockwise", rotatio
         object_id_move = np.random.choice(range(len(objects)), 1, replace=False)[0]
     absolute_rotation = rotation_angle_deg
     if rotation in ["clockwise", "anticlockwise"]:
-            if rotation == "clockwise":
-                rotation_angle_deg = -1 * rotation_angle_deg
+        if rotation == "clockwise":
+            rotation_angle_deg = -1 * rotation_angle_deg
     else:
-        print ("Warning : Wrong rotation value, only ""clockwise"" and ""anticlockwise"" are permitted.")
-
+        print("Warning : Wrong rotation value, only ""clockwise"" and ""anticlockwise"" are permitted.")
 
     # Get the pose of the object to move
     obj_start_pose = objects[object_id_move].pose
@@ -321,7 +315,6 @@ def move_object_rotate_x(env, pretend=False, rotation = "anticlockwise", rotatio
 
     env.cubeA = objects[object_id_move]
 
-
     # now creat a text
     text_names = env.object_names
     verb = "rotate"
@@ -330,6 +323,7 @@ def move_object_rotate_x(env, pretend=False, rotation = "anticlockwise", rotatio
     action_text = f"{verb} {text_names[object_id_move]} {adverbs[0]}"
     print(action_text)
     return obj_start_pose, obj_end_pose, action_text
+
 
 def move_object_lr_singular(env, direction="left", pretend=False, offset=0.1):
     env = env.unwrapped
@@ -342,7 +336,6 @@ def move_object_lr_singular(env, direction="left", pretend=False, offset=0.1):
         print("Warning: not enough unique objects")
         object_id_move = np.random.choice(range(len(objects)), 1, replace=False)[0]
 
-
     camera_config = env.render_camera_config
     output = parse_camera_configs(camera_config)
     camera_pose = output["render_camera"].pose
@@ -354,13 +347,12 @@ def move_object_lr_singular(env, direction="left", pretend=False, offset=0.1):
     # Create a copy of the object's pose for the end position
     obj_end_pose = Pose.create_from_pq(p=obj_start_pose.get_p(), q=obj_start_pose.get_q())
 
-
     # Compute the direction from the camera to the base object
     base_position = obj_start_pose.get_p()
     cam_pos = camera_pose.get_p()
 
     adjusted_cam_pos = cam_pos.clone()
-    adjusted_cam_pos [:, 2] = base_position [:, 2]
+    adjusted_cam_pos[:, 2] = base_position[:, 2]
 
     direction_vector = base_position - adjusted_cam_pos
 
@@ -394,7 +386,6 @@ def move_object_lr_singular(env, direction="left", pretend=False, offset=0.1):
 
     env.cubeA = objects[object_id_move]
 
-
     # Create a text description of the action
     text_names = env.object_names
     verb = "move"
@@ -420,31 +411,26 @@ def move_object_forward_backward(env, direction="forward", pretend=False, offset
         print("Warning: not enough unique objects")
         object_id_move = np.random.choice(range(len(objects)), 1, replace=False)[0]
 
-
     camera_config = env.render_camera_config
     output = parse_camera_configs(camera_config)
     camera_pose = output["render_camera"].pose
 
     # Get the poses of the object to move
-
     obj_start_pose = objects[object_id_move].pose
 
     # Create a copy of the object's pose for the end position
     obj_end_pose = Pose.create_from_pq(p=obj_start_pose.get_p(), q=obj_start_pose.get_q())
-
 
     # Compute the direction from the camera to the base object
     base_position = obj_start_pose.get_p()
     cam_pos = camera_pose.get_p()
 
     adjusted_cam_pos = cam_pos.clone()
-    adjusted_cam_pos [:, 2] = base_position [:, 2]
-
+    adjusted_cam_pos[:, 2] = base_position[:, 2]
     direction_vector = base_position - adjusted_cam_pos
 
     # Normalize the flattened direction vector
     direction_unit = direction_vector / torch.norm(direction_vector, dim=1, keepdim=True)
-
 
     # Compute the new position based on the direction parameter
     if direction == "forward":
@@ -468,7 +454,6 @@ def move_object_forward_backward(env, direction="forward", pretend=False, offset
 
     env.cubeA = objects[object_id_move]
 
-
     # Create a text description of the action
     text_names = env.object_names
     verb = "move"
@@ -478,7 +463,5 @@ def move_object_forward_backward(env, direction="forward", pretend=False, offset
     }
 
     prep = prepositions[direction]
-
     action_text = f"{verb} {text_names[object_id_move]} {prep} "
-
     return obj_start_pose, obj_end_pose, action_text

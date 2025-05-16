@@ -8,16 +8,18 @@ from mani_skill.envs.tasks import StackCubeEnv
 from mani_skill.examples.motionplanning.panda.utils import (
     compute_grasp_info_by_obb, get_actor_obb)
 
+
 def object_is_rotationally_invariant(env, obj):
     if env.object_dataset == "clevr" and "sphere" in obj.name:
         return True
     return False
 
+
 def get_grasp_pose_and_obb(env: StackCubeEnv):
     FINGER_LENGTH = 0.025
     env = env.unwrapped
     obb = get_actor_obb(env.cubeA)
-    
+
     approaching = np.array([0, 0, -1])
     target_closing = env.agent.tcp.pose.to_transformation_matrix()[0, :3, 1].numpy()
     grasp_info = compute_grasp_info_by_obb(

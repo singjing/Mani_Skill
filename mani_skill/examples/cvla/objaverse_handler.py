@@ -2,15 +2,14 @@ import json
 import gzip
 import shutil
 import tarfile
-import pathlib
 import requests
 import itertools
 from pathlib import Path
-from typing import List, Dict, Literal, Optional
+from typing import Union, Dict, Literal, Optional
 
-import PIL
+from PIL import Image
 import numpy as np
-import transforms3d
+from scipy.spatial.transform import Rotation as R
 import sapien
 
 try:
@@ -30,7 +29,9 @@ except ImportError:
     print("ChatGPT describer not loaded")
     chatgpt_describer = None
 
-get_spoc_download_url = lambda uid: SPOC_DOWNLOAD_URL.format(uid)
+
+def get_spoc_download_url(uid):
+    return SPOC_DOWNLOAD_URL.format(uid)
 
 
 def get_bounding_box_from_dict(box_dict: Dict) -> np.ndarray:
@@ -91,11 +92,12 @@ class SpocDatasetBuilder:
         if self._filtered_spoc_annotations is None:
             print("filtering spock annotations.")
             # TODO Add the filter as a class/function here?
+
             def filter_func(annotation: Dict):
                 if annotation["scale"] > 1.0:
                     return False
 
-                if not "assetMetadata" in annotation["thor_metadata"]:
+                if "assetMetadata" not in annotation["thor_metadata"]:
                     return False
 
                 bbox = get_bounding_box_from_annotation(annotation)
@@ -126,8 +128,7 @@ class SpocDatasetBuilder:
             }
 
             if (
-                self.maximum_objects
-                and len(self._filtered_spoc_annotations) > self.maximum_objects
+                self.maximum_objects and len(self._filtered_spoc_annotations) > self.maximum_objects
             ):
                 print(
                     f"Warning: Limiting the number of Spoc objects to {self.maximum_objects} of {len(self.spoc_annotations)}"
@@ -144,7 +145,7 @@ class SpocDatasetBuilder:
 
     def __len__(self):
         return len(self.filtered_spoc_annotations)
-    
+
     def sample_uuids(self, num_objects: int = 1, with_replacement=False):
         uuids = randomization.choice(
             list(self.filtered_spoc_annotations.keys()),
@@ -162,7 +163,7 @@ class SpocDatasetBuilder:
         #     "031ba5c3f25947db9114f7ab7f8b9e7a",
         # ][:num_objects]
         return uuids
-    
+
     def get_bbox(self, obj_uuid):
         annotation = self.spoc_annotations[obj_uuid]
         bbox = get_bounding_box_from_annotation(annotation)
@@ -195,7 +196,7 @@ class SpocDatasetBuilder:
         assert spoc_glb_path.exists(), f"glb file not found {spoc_glb_path}"
         return spoc_glb_path
 
-    def _download_spoc(self, obj_uuid) -> type[pathlib.Path | None]:
+    def _download_spoc(self, obj_uuid) -> Union[Path, None]:
         spoc_archive_path = (self.spoc_models_path / obj_uuid).with_suffix(".tar")
 
         if not (spoc_archive_path.exists() and spoc_archive_path.stat().st_size > 8192):
@@ -206,7 +207,7 @@ class SpocDatasetBuilder:
                 )  # Use streaming for large files
                 response.raise_for_status()  # Raise an exception for HTTP errors
             except requests.exceptions.HTTPError as e:
-                print(f"HTTP error occurred {e = } when downloading {obj_uuid}")
+                print(f"HTTP error occurred {e} when downloading {obj_uuid}")
                 return
 
             with spoc_archive_path.open("wb") as file:
@@ -257,14 +258,14 @@ class SpocDatasetBuilder:
         )
         uvs_np = np.array([list(vertex.values()) for vertex in data_loaded["uvs"]])
 
-        albedo_img = PIL.Image.open(spoc_obj_path / data_loaded["albedoTexturePath"])
-        emission_img = PIL.Image.open(
+        albedo_img = Image.open(spoc_obj_path / data_loaded["albedoTexturePath"])
+        emission_img = Image.open(
             spoc_obj_path / data_loaded["emissionTexturePath"]
         )
-        metallic_smoothnes_img = PIL.Image.open(
+        metallic_smoothnes_img = Image.open(
             spoc_obj_path / data_loaded["metallicSmoothnessTexturePath"]
         )
-        normals_img = PIL.Image.open(spoc_obj_path / data_loaded["normalTexturePath"])
+        normals_img = Image.open(spoc_obj_path / data_loaded["normalTexturePath"])
 
         # random_color_visual = trimesh.visual.ColorVisuals(vertex_colors=np.random.rand(vertices_np.shape[0], 4))
 
@@ -306,7 +307,7 @@ class SpocDatasetBuilder:
 
     def get_condensed_gpt_description(self, obj_uuid, recreate=False):
         descriptions = self.get_spoc_descriptions(obj_uuid)
-        
+
         if obj_uuid in self._reduced_gpt_descriptions:
             return self._reduced_gpt_descriptions[obj_uuid]
 
@@ -347,10 +348,10 @@ class SpocDatasetBuilder:
 
 
 class SpocDatasetBuilderFast(SpocDatasetBuilder):
-    def __init__(self, spoc_root_path = SPOC_ROOT_PATH,
-                 annotation_file = SPOC_ROOT_PATH / "clip_description2.jsonl",
-                 maximum_objects = None):
-        
+    def __init__(self, spoc_root_path=SPOC_ROOT_PATH,
+                 annotation_file=SPOC_ROOT_PATH / "clip_description2.jsonl",
+                 maximum_objects=None):
+
         # do this to get files, but try not to call anything that requires loading spoc annotations, otherwise it takes long
         super().__init__(spoc_root_path)
 
@@ -372,19 +373,19 @@ class SpocDatasetBuilderFast(SpocDatasetBuilder):
                 return False
             if v_grayscale > t_grayscale:
                 return False
-            
-            short_descr_values = [v for k,v in annotation["description"].items() if len(k.split()) < 4]
+
+            short_descr_values = [v for k, v in annotation["description"].items() if len(k.split()) < 4]
             v_best_descr = max(short_descr_values)
             if v_best_descr < t_best_descr:
                 return False
 
-            short_descr_text = [k for k,v in annotation["description"].items() if len(k.split()) < 4]
+            short_descr_text = [k for k, v in annotation["description"].items() if len(k.split()) < 4]
             best_descr = short_descr_text[np.argmax(short_descr_values)]
             blacklist_words = set(("stone", "rock", "figurine", "ring"))
             if set(best_descr.split()).intersection(blacklist_words):
                 return False
             return True
-        
+
         self.clip_annotation_data_filterd = {}
         for annotation in self.clip_annotation_data.values():
             if filter_func(annotation):
@@ -408,14 +409,13 @@ class SpocDatasetBuilderFast(SpocDatasetBuilder):
 
         return scale
 
-    
     def get_object_name(self, obj_uuid, max_len=3):
         annotation = self.clip_annotation_data[obj_uuid]
-        short_descr_values = [v for k,v in annotation["description"].items() if len(k.split()) <= max_len]
-        short_descr_text = [k for k,v in annotation["description"].items() if len(k.split()) <= max_len]
+        short_descr_values = [v for k, v in annotation["description"].items() if len(k.split()) <= max_len]
+        short_descr_text = [k for k, v in annotation["description"].items() if len(k.split()) <= max_len]
         best_descr = short_descr_text[np.argmax(short_descr_values)]
         return best_descr
-    
+
     def sample_uuids(self, num_objects: int = 1, with_replacement=False):
         uuids = randomization.choice(
             list(self.clip_annotation_data_filterd.keys()),
@@ -427,20 +427,18 @@ class SpocDatasetBuilderFast(SpocDatasetBuilder):
         return uuids
 
 
-
-
 # Specific for Maniskill --> TODO: Refactor into somewhere else when there is time
 def get_spoc_builder(
     scene: ManiSkillScene,
     uuid,
     add_collision=True,
     add_visual=True,
-    spoc_dataset:SpocDatasetBuilder = None
+    spoc_dataset: SpocDatasetBuilder = None
 ):
     # We need to rotate the object around z to make it upright?
-    obj_q = transforms3d.quaternions.axangle2quat(
-        np.array([1, 0, 0]), theta=np.deg2rad(90)
-    )
+    #obj_q = transforms3d.quaternions.axangle2quat(np.array([1, 0, 0]), theta=np.deg2rad(90))
+    obj_q = R.from_rotvec(np.deg2rad(90) * np.array([1, 0, 0])).as_quat(scalar_first=True)
+
     # TODO Use pose_z_rot_angle from the annotations?
     obj_pose = sapien.Pose(q=obj_q)
 
@@ -473,6 +471,7 @@ def get_spoc_builder(
         )
 
     return builder
+
 
 if __name__ == "__main__":
     SpocDataset = SpocDatasetBuilder(
