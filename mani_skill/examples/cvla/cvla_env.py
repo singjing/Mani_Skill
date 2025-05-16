@@ -333,7 +333,7 @@ class CvlaMoveEnv(BaseEnv):
                 else:
                     # Random global shift
                     xy = torch.rand((b, 2)) * 0.2 - 0.1  # rand is uniform [0,1], so shift to [-0.1, 0.1]
-                    shape_xy = xy + sampler.sample(radius, max_trials=10000, verbose=False)
+                    shape_xy = xy + sampler.sample(radius, max_trials=10000, verbose=False, err_on_fail=True)
                     xyz[:, :2] = shape_xy
 
                     table = self.scene.actors['table-workspace']

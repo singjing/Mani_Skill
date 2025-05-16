@@ -32,7 +32,7 @@ class UniformPlacementSampler:
         self.fixture_positions = None
         self.batch_size = batch_size
 
-    def sample(self, radius, max_trials, append=True, verbose=False):
+    def sample(self, radius, max_trials, append=True, verbose=False, err_on_fail=False):
         """Sample a position.
 
         Args:
@@ -40,6 +40,7 @@ class UniformPlacementSampler:
             max_trials (int): maximal trials to sample.
             append (bool, optional): whether to append the new sample to fixtures. Defaults to True.
             verbose (bool, optional): whether to print verbosely. Defaults to False.
+            erro_on_fail: whether to raise an error on failure to sample.
 
         Returns:
             torch.Tensor: a sampled position.
@@ -73,7 +74,8 @@ class UniformPlacementSampler:
             else:
                 if verbose:
                     print("Fail to find a valid sample!")
-                raise RuntimeError("Fail to find a valid sample!")
+                if err_on_fail:
+                    raise RuntimeError("Fail to find a valid sample!")
         if append:
             if self.fixture_positions is None:
                 self.fixture_positions = sampled_pos[None, ...]
