@@ -31,7 +31,7 @@ except ImportError:
 
 
 def get_spoc_download_url(uid):
-    return SPOC_DOWNLOAD_URL.format(uid)
+    return f"https://pub-2619544d52bd4f35927b08d301d2aba0.r2.dev/assets/{uid}.tar"
 
 
 def get_bounding_box_from_dict(box_dict: Dict) -> np.ndarray:

@@ -126,7 +126,7 @@ def reset_random(args, orig_seeds):
     np.random.seed(seed)
 
 
-def iterate_env(args: Args, vis=True, model=None):
+args: Args, vis=True, model=None):
     np.set_printoptions(suppress=True, precision=3)
     verbose = not args.quiet
     parallel_in_single_scene = args.render_mode == "human"

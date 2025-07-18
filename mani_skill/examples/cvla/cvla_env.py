@@ -27,13 +27,15 @@ from mani_skill.examples.cvla.cvla_env_solver import get_grasp_pose_and_obb
 from mani_skill.examples.cvla.utils_traj_tokens import to_prefix_suffix, getActionEncInstance
 from mani_skill.examples.cvla.objaverse_handler import SpocDatasetBuilderFast, get_spoc_builder
 
+obj_start_globle = [0, 0, 0]
+
 
 @register_env("CvlaMove-v1", max_episode_steps=50)
 class CvlaMoveEnv(BaseEnv):
     SUPPORTED_ROBOTS = ["panda_wristcam", "panda", "fetch"]
     SUPPORTED_OBJECT_DATASETS = ["clevr", "ycb", "objaverse"]
     SUPPORTED_SCENE_DATASETS = ['Table', 'ProcTHOR']
-    SUPPORTED_CAM_VIEWS = ['fixed', 'random_side', 'random']
+    SUPPORTED_CAM_VIEWS = ['fixed', 'random_side', 'random', 'top']
     agent: Union[Panda, Fetch]
 
     def __init__(
@@ -75,33 +77,63 @@ class CvlaMoveEnv(BaseEnv):
     def initalize_render_camera(self):
         fov_range = [1.0, 1.0]
         z_range = [0.0, 0.0]
-
+        grasp_pose = [0, 0, 0]
         if self.camera_views == "fixed":
             start_p = [0.6, 0.7, 0.6]
             end_p = [0.0, 0.0, 0.12]
             t = 0.5
             start_p = (np.array(start_p) * t + np.array(end_p) * (1 - t)).tolist()
+        
+        elif self.camera_views == "top" :
+            
+            if hasattr(self, 'grasp_pose'):
+                # Define cylindrical sampling parameters for top view
+                obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
+                #print(action_text)
+                grasp_pose = obj_start.p
+                grasp_pose = grasp_pose[0]
+                # Convert to Cartesian coordinates for camera position
+                start_p = [
+                    grasp_pose[0], #+ r * np.cos(phi), # so the virtual camera will look from the robot arm and avoid occlusion
+                    grasp_pose[1], #+ r * np.sin(phi),
+                    grasp_pose[2] + 1
+                ]
+                # Camera looks downward (same XY as start_p but lower Z)
+                end_p = [start_p[0], start_p[1], start_p[2] - 0.3]
+                
+            else: # the first time before grasp_pose was generate, make the camera at the zero point
+                start_p = [0.0, 0.0, 0.6]
+                end_p = [0.0, 0.0, 0.0]
+            
         else:
+            #tmp test
+            #self.camera_views = "random_side"
             if self.camera_views == "random_side":
                 cylinder_l = np.array([.35, -np.pi * 4 / 5, .26])
                 cylinder_h = np.array([.55, np.pi * 4 / 5, .46])
-
+                if hasattr(self, 'grasp_pose'):
+                    obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
+                    grasp_pose = obj_start.p
+                    grasp_pose = grasp_pose[0]
             elif self.camera_views == "random":
                 cylinder_l = np.array([.0, -np.pi, .25])
                 cylinder_h = np.array([.50, np.pi, .65])
-
+                            
             elif self.camera_views == "random_fov":
                 cylinder_l = np.array([.0, -np.pi, .25])
                 cylinder_h = np.array([.50, np.pi, .65])
                 fov_range = [np.deg2rad(50), np.deg2rad(75)]
                 z_range = [-15, 15]
             else:
-                raise ValueError(f"unknown camera_views {self.camera_views}, options {self.SUPPORTED_CAM_VIEWS}")
-
+                #raise ValueError(f"unknown camera_views {self.camera_views}, options {self.SUPPORTED_CAM_VIEWS}")
+                #only for grasp task
+                cylinder_l = np.array([0.1, -np.pi, 0.4])  # min radius, min angle, min height
+                cylinder_h = np.array([0.3, np.pi, 0.6])   # max radius, max angle, max height
+                
             r, phi, z = randomization.uniform(cylinder_l, cylinder_h, size=(3,)).cpu().numpy().astype(float)
             start_p = [r * np.cos(phi), r * np.sin(phi), z]
             end_p = randomization.uniform(*zip(*self.object_region), size=(3,)).cpu().numpy().astype(float)
-
+        
         fov = randomization.uniform(*fov_range, size=(1,)).cpu().numpy().astype(float)[0]
         z_rot = randomization.uniform(*z_range, size=(1,)).cpu().numpy().astype(float)[0]
         z_rot_orn = R.from_euler("xyz", (0, 0, z_rot), degrees=True)
@@ -112,6 +144,8 @@ class CvlaMoveEnv(BaseEnv):
             start_p = (np.array(start_p) + np.array(end_p)).tolist()
 
         pose = sapien_utils.look_at(start_p, end_p) * z_rot_pose
+        print("pose")
+        print(pose)
         self.render_camera_config = CameraConfig("render_camera", pose, width=self.cam_size, height=self.cam_size,
                                                  fov=fov, near=0.01, far=100)
         # self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
@@ -309,6 +343,7 @@ class CvlaMoveEnv(BaseEnv):
         return True
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
+        print("!!!")
         with torch.device(self.device):
             b = len(env_idx)
             self.table_scene.initialize(env_idx)
@@ -378,6 +413,8 @@ class CvlaMoveEnv(BaseEnv):
                 for i in range(self.cam_resample_if_objs_unseen):
                     camera = self.scene.human_render_cameras['render_camera'].camera
                     are_visible = self.check_objects_visible(obj_start, obj_end, camera)
+                    #only for grasp task, temporarily setting the are_visible = true (to change)
+                    are_visible = True
                     if are_visible:
                         break
                     self.initalize_render_camera()

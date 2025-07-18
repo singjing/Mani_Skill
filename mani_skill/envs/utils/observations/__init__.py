@@ -30,7 +30,7 @@ class ObservationModeStruct:
         return self.state or self.state_dict
 
 
-ALL_VISUAL_TEXTURES = ["rgb", "depth", "segmentation", "position", "normal", "albedo"]
+ALL_VISUAL_TEXTURES = ["rgb", "depth", "segmentation", "position", "normal", "albedo", "top_view"]
 """set of all standard textures that can come from cameras"""
 
 
