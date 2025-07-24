@@ -1,4 +1,4 @@
-"""
+F"""
 
 """
 from typing import Any, Dict, Union, Optional
@@ -88,15 +88,19 @@ class CvlaMoveEnv(BaseEnv):
             
             if hasattr(self, 'grasp_pose'):
                 # Define cylindrical sampling parameters for top view
-                obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
+                #obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
                 #print(action_text)
-                grasp_pose = obj_start.p
+                grasp_pose = self.grasp_pose.p
                 grasp_pose = grasp_pose[0]
+
+                # debug only, need to be delete
+                #grasp_pose = [ 0.0123, -0.9906, -0.1356, -0.0123]
+                
                 # Convert to Cartesian coordinates for camera position
                 start_p = [
                     grasp_pose[0], #+ r * np.cos(phi), # so the virtual camera will look from the robot arm and avoid occlusion
                     grasp_pose[1], #+ r * np.sin(phi),
-                    grasp_pose[2] + 1
+                    grasp_pose[2] + 0.6
                 ]
                 # Camera looks downward (same XY as start_p but lower Z)
                 end_p = [start_p[0], start_p[1], start_p[2] - 0.3]
@@ -111,10 +115,6 @@ class CvlaMoveEnv(BaseEnv):
             if self.camera_views == "random_side":
                 cylinder_l = np.array([.35, -np.pi * 4 / 5, .26])
                 cylinder_h = np.array([.55, np.pi * 4 / 5, .46])
-                if hasattr(self, 'grasp_pose'):
-                    obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
-                    grasp_pose = obj_start.p
-                    grasp_pose = grasp_pose[0]
             elif self.camera_views == "random":
                 cylinder_l = np.array([.0, -np.pi, .25])
                 cylinder_h = np.array([.50, np.pi, .65])
@@ -143,9 +143,7 @@ class CvlaMoveEnv(BaseEnv):
             print("Warning: ProcTHOR camera randomization not well tested.")
             start_p = (np.array(start_p) + np.array(end_p)).tolist()
 
-        pose = sapien_utils.look_at(start_p, end_p) * z_rot_pose
-        print("pose")
-        print(pose)
+        pose = sapien_utils.look_at(start_p, end_p, up=[0, 1, 0]) * z_rot_pose
         self.render_camera_config = CameraConfig("render_camera", pose, width=self.cam_size, height=self.cam_size,
                                                  fov=fov, near=0.01, far=100)
         # self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
@@ -343,7 +341,6 @@ class CvlaMoveEnv(BaseEnv):
         return True
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
-        print("!!!")
         with torch.device(self.device):
             b = len(env_idx)
             self.table_scene.initialize(env_idx)
@@ -389,7 +386,7 @@ class CvlaMoveEnv(BaseEnv):
                 shape.set_pose(Pose.create_from_pq(p=xyz.clone(), q=qs))
 
             # do intervention
-            obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
+            obj_start, obj_end, action_text, object_init = move_object_onto(self, pretend=True)
             self.set_goal_pose(obj_end)
             self.obj_start = obj_start
             self.obj_end = obj_end

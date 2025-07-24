@@ -69,7 +69,7 @@ def move_object_onto(env, pretend=False):
     verb = "move"
     prep = "onto"
     action_text = f"{verb} {text_names[object_id_move]} {prep} {text_names[object_id_base]}"
-    return obj_start_pose, obj_end_pose, action_text
+    return obj_start_pose, obj_end_pose, action_text, objects[object_id_move]
 
 
 def quat_multiply(q1, q2):

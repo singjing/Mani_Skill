@@ -4,6 +4,7 @@ See examples/motionplanning/panda/solutions/stack_cube.py for the template of th
 import gymnasium as gym
 import numpy as np
 
+from mani_skill.utils.building import actors
 from mani_skill.envs.tasks import StackCubeEnv
 from mani_skill.examples.motionplanning.panda.utils import (
     compute_grasp_info_by_obb, get_actor_obb)
@@ -19,6 +20,8 @@ def get_grasp_pose_and_obb(env: StackCubeEnv):
     FINGER_LENGTH = 0.025
     env = env.unwrapped
     obb = get_actor_obb(env.cubeA)
+    #try the other way to make sure to get the right object
+    #obb = get_actor_obb(target_object)
 
     approaching = np.array([0, 0, -1])
     target_closing = env.agent.tcp.pose.to_transformation_matrix()[0, :3, 1].numpy()
