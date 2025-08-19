@@ -78,6 +78,7 @@ class CvlaMoveEnv(BaseEnv):
         fov_range = [1.0, 1.0]
         z_range = [0.0, 0.0]
         grasp_pose = [0, 0, 0]
+        temp = [0,0,0]
         if self.camera_views == "fixed":
             start_p = [0.6, 0.7, 0.6]
             end_p = [0.0, 0.0, 0.12]
@@ -90,21 +91,24 @@ class CvlaMoveEnv(BaseEnv):
                 # Define cylindrical sampling parameters for top view
                 #obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
                 #print(action_text)
-                grasp_pose = self.grasp_pose.p
-                grasp_pose = grasp_pose[0]
-
-                # debug only, need to be delete
-                #grasp_pose = [ 0.0123, -0.9906, -0.1356, -0.0123]
+                #grasp_pose = self.grasp_pose.p
+                #grasp_pose = grasp_pose[0]
                 
+                temp = self.grasp_pose.p[0]
+                
+                temp[2] = 0.6
+                print("temp")
+                print(temp)
                 # Convert to Cartesian coordinates for camera position
+                '''
                 start_p = [
                     grasp_pose[0], #+ r * np.cos(phi), # so the virtual camera will look from the robot arm and avoid occlusion
                     grasp_pose[1], #+ r * np.sin(phi),
-                    grasp_pose[2] + 0.6
+                    grasp_pose[2]+0.6 
                 ]
                 # Camera looks downward (same XY as start_p but lower Z)
-                end_p = [start_p[0], start_p[1], start_p[2] - 0.3]
-                
+                end_p = [start_p[0], start_p[1], start_p[2]-0.3]
+                '''
             else: # the first time before grasp_pose was generate, make the camera at the zero point
                 start_p = [0.0, 0.0, 0.6]
                 end_p = [0.0, 0.0, 0.0]
@@ -134,18 +138,37 @@ class CvlaMoveEnv(BaseEnv):
             start_p = [r * np.cos(phi), r * np.sin(phi), z]
             end_p = randomization.uniform(*zip(*self.object_region), size=(3,)).cpu().numpy().astype(float)
         
-        fov = randomization.uniform(*fov_range, size=(1,)).cpu().numpy().astype(float)[0]
-        z_rot = randomization.uniform(*z_range, size=(1,)).cpu().numpy().astype(float)[0]
-        z_rot_orn = R.from_euler("xyz", (0, 0, z_rot), degrees=True)
-        z_rot_pose = Pose.create_from_pq(q=z_rot_orn.as_quat(scalar_first=True))
+        #fov = randomization.uniform(*fov_range, size=(1,)).cpu().numpy().astype(float)[0]
+        #z_rot = randomization.uniform(*z_range, size=(1,)).cpu().numpy().astype(float)[0]
+        #debug only
+        #z_rot_orn = R.from_euler("xyz", (0, 0, z_rot), degrees=True)
+        #z_rot_orn = R.from_euler("xyz", (0, 0, 0), degrees=True)
+        #z_rot_pose = Pose.create_from_pq(q=z_rot_orn.as_quat(scalar_first=True))
 
         if self.scene_dataset == "ProcTHOR":
             print("Warning: ProcTHOR camera randomization not well tested.")
             start_p = (np.array(start_p) + np.array(end_p)).tolist()
 
-        pose = sapien_utils.look_at(start_p, end_p, up=[0, 1, 0]) * z_rot_pose
-        self.render_camera_config = CameraConfig("render_camera", pose, width=self.cam_size, height=self.cam_size,
-                                                 fov=fov, near=0.01, far=100)
+        #pose = sapien_utils.look_at(start_p, end_p, up=[1, 0, 0]) * z_rot_pose
+        #pose = sapien_utils.look_at(start_p, end_p) * z_rot_pose
+        #degub only
+        temp_orn = R.from_euler("xyz", (0, 90, 0), degrees=True)
+        #temp_pose = Pose.createfrom_pq(p=pose.p,q=temp_orn.as_quat(scalar_first=True))
+        #print("pose.p")
+        #pose.p[0,2]+=0.3
+        #pose.p[0,0]+=0.3
+        #print(pose.p,pose)
+        temp_pose = Pose.create_from_pq(p=temp,q=temp_orn.as_quat(scalar_first=True))
+        #q_wxyz = temp_orn.as_quat(scalar_first=True)
+        #q_xyzw = [q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]]
+        #tt_pose =  Pose.create_from_pq(p=pose.p,q=q_xyzw)
+        
+        print("temp_pose")
+        print(temp_pose)
+        self.render_camera_config = CameraConfig("render_camera", temp_pose, width=self.cam_size, height=self.cam_size,
+                                                 intrinsic= [[410.0292,   0.0000, 224.0000],
+         [  0.0000, 410.0292, 224.0000],
+         [  0.0000,   0.0000,   1.0000]], near=0.01, far=100)
         # self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
 
     @property
@@ -387,6 +410,9 @@ class CvlaMoveEnv(BaseEnv):
 
             # do intervention
             obj_start, obj_end, action_text, object_init = move_object_onto(self, pretend=True)
+            #only for debug
+            print("text description")
+            print(action_text)
             self.set_goal_pose(obj_end)
             self.obj_start = obj_start
             self.obj_end = obj_end

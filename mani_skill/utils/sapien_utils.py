@@ -16,7 +16,7 @@ from mani_skill.utils.structs.pose import Pose
 
 if TYPE_CHECKING:
     from mani_skill.utils.structs.actor import Actor
-    from mani_skill.envs.scene import ManiSkillScene
+    from mani_skill.envs.scene import ManiSkillSceneF
 
 import torch
 
