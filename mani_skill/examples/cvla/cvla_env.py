@@ -6,6 +6,7 @@ from typing import Any, Dict, Union, Optional
 import numpy as np
 import torch
 import sapien
+import copy
 from scipy.spatial.transform import Rotation as R
 
 from mani_skill import ASSET_DIR
@@ -78,7 +79,8 @@ class CvlaMoveEnv(BaseEnv):
         fov_range = [1.0, 1.0]
         z_range = [0.0, 0.0]
         grasp_pose = [0, 0, 0]
-        temp = [0,0,0]
+        temp1 = [0,0,0]
+        list_a = [0.5, 0.3, 0]
         if self.camera_views == "fixed":
             start_p = [0.6, 0.7, 0.6]
             end_p = [0.0, 0.0, 0.12]
@@ -91,15 +93,16 @@ class CvlaMoveEnv(BaseEnv):
                 # Define cylindrical sampling parameters for top view
                 #obj_start, obj_end, action_text = move_object_onto(self, pretend=True)
                 #print(action_text)
-                #grasp_pose = self.grasp_pose.p
-                #grasp_pose = grasp_pose[0]
+                grasp_pose = self.grasp_pose.get_p()
+                #temp1 = copy.deepcopy(self.obj_start.p[0])
+                #temp = self.grasp_pose.p[0]
                 
-                temp = self.grasp_pose.p[0]
-                
-                temp[2] = 0.6
-                print("temp")
-                print(temp)
                 # Convert to Cartesian coordinates for camera position
+                list_a[0] = round(float(grasp_pose[0,0]), 4)
+                list_a[1] = round(float(grasp_pose[0,1]), 4)
+                print("list_a")
+                print(list_a)
+                print(grasp_pose)
                 '''
                 start_p = [
                     grasp_pose[0], #+ r * np.cos(phi), # so the virtual camera will look from the robot arm and avoid occlusion
@@ -157,14 +160,13 @@ class CvlaMoveEnv(BaseEnv):
         #print("pose.p")
         #pose.p[0,2]+=0.3
         #pose.p[0,0]+=0.3
-        #print(pose.p,pose)
-        temp_pose = Pose.create_from_pq(p=temp,q=temp_orn.as_quat(scalar_first=True))
+        print("list_a before given to camera")
+        print(list_a)
+        temp_pose = Pose.create_from_pq(p=[list_a[0], list_a[1], 0.4],q=temp_orn.as_quat(scalar_first=True))
         #q_wxyz = temp_orn.as_quat(scalar_first=True)
         #q_xyzw = [q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]]
         #tt_pose =  Pose.create_from_pq(p=pose.p,q=q_xyzw)
-        
-        print("temp_pose")
-        print(temp_pose)
+        #[-0.1663, -0.0673,  0.0700]
         self.render_camera_config = CameraConfig("render_camera", temp_pose, width=self.cam_size, height=self.cam_size,
                                                  intrinsic= [[410.0292,   0.0000, 224.0000],
          [  0.0000, 410.0292, 224.0000],
