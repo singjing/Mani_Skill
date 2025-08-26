@@ -585,7 +585,7 @@ class BaseEnv(gym.Env):
         """
         for obj in self._hidden_objects:
             obj.hide_visual()
-        self.scene.update_render(update_sensors=True, update_human_render_cameras=False)
+        self.scene.update_render(update_sensors=True, update_human_render_cameras=True)
         self.capture_sensor_data()
         sensor_obs = dict()
         for name, sensor in self.scene.sensors.items():
