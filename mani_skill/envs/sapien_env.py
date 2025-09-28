@@ -594,6 +594,11 @@ class BaseEnv(gym.Env):
                     # normally in non visual observation modes we do not render sensor observations. But some users may want to render sensor data for debugging or various algorithms
                     sensor_obs[name] = sensor.get_obs(position=False, segmentation=False, apply_texture_transforms=apply_texture_transforms)
                 else:
+                    # hide the robot arm for top view
+                    #if name == "top_camera":
+                                           
+                            
+                        
                     sensor_obs[name] = sensor.get_obs(
                         rgb=self.obs_mode_struct.visual.rgb,
                         depth=self.obs_mode_struct.visual.depth,
@@ -761,6 +766,9 @@ class BaseEnv(gym.Env):
 
         # Add task/external sensors
         self._sensor_configs.update(parse_camera_configs(self._default_sensor_configs))
+        # add an extra camera
+        if hasattr(self, "top_camera_config"):
+            self._sensor_configs["top_camera"] = self.top_camera_config
 
         # Add agent sensors
         self._agent_sensor_configs = dict()
@@ -796,7 +804,7 @@ class BaseEnv(gym.Env):
 
         # Now we instantiate the actual sensor objects
         self._sensors = dict()
-
+        
         for uid, sensor_config in self._sensor_configs.items():
             if uid in self._agent_sensor_configs:
                 articulation = self.agent.robot
@@ -819,6 +827,7 @@ class BaseEnv(gym.Env):
                 camera_config,
                 self.scene,
             )
+         
 
         self.scene.sensors = self._sensors
         self.scene.human_render_cameras = self._human_render_cameras

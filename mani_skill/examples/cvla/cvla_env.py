@@ -87,7 +87,7 @@ class CvlaMoveEnv(BaseEnv):
             t = 0.5
             start_p = (np.array(start_p) * t + np.array(end_p) * (1 - t)).tolist()
         
-        elif self.camera_views == "top" :
+        elif "top" in self.camera_views:
             
             if hasattr(self, 'grasp_pose'):
                 # Define cylindrical sampling parameters for top view
@@ -104,10 +104,10 @@ class CvlaMoveEnv(BaseEnv):
                 start_p = [
                     list_a[0], #+ r * np.cos(phi), # so the virtual camera will look from the robot arm and avoid occlusion
                     list_a[1], #+ r * np.sin(phi),
-                    0.6 
+                    0.4 
                 ]
                 # Camera looks downward (same XY as start_p but lower Z)
-                end_p = [list_a[0]-0.01, list_a[1]-0.01, 0.3]
+                end_p = [list_a[0]-0.01, list_a[1]-0.01, 0.1]
                 
 
                 #start_p = [0.6, 0.01, 0.01]
@@ -153,39 +153,74 @@ class CvlaMoveEnv(BaseEnv):
             print("Warning: ProcTHOR camera randomization not well tested.")
             start_p = (np.array(start_p) + np.array(end_p)).tolist()
 
-        #pose = sapien_utils.look_at(start_p, end_p, up=[1, 0, 0]) * z_rot_pose
+        pose = sapien_utils.look_at(start_p, end_p, up=[1, 0, 0]) * z_rot_pose
         #pose = sapien_utils.look_at(start_p, end_p) * z_rot_pose
         #degub only
-        print("list_a")
-        print(list_a)
         temp_orn = R.from_euler("xyz", (0, 90, 0), degrees=True)
-        temp_pose = Pose.create_from_pq(p= list_a,q=temp_orn.as_quat(scalar_first=True))
+        #temp_pose = Pose.create_from_pq(p= [list_a[0], list_a[1], list_a[2]],q=temp_orn.as_quat(scalar_first=True))
         
         #print("pose.p")
         #pose.p[0,2]+=0.3
         #pose.p[0,0]+=0.3
         #print("list_a before given to camera")
         #print(list_a)
-        #temp_pose = Pose.create_from_pq(p=[list_a[0], list_a[1], 0.4],q=temp_orn.as_quat(scalar_first=True))
+        temp_pose = Pose.create_from_pq(p=[list_a[0], list_a[1], 0.3],q=temp_orn.as_quat(scalar_first=True))
         #q_wxyz = temp_orn.as_quat(scalar_first=True)
         #q_xyzw = [q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]]
         #tt_pose =  Pose.create_from_pq(p=pose.p,q=q_xyzw)
         #[-0.1663, -0.0673,  0.0700]
-        print("real pose")
-        print(temp_pose.get_p)
         self.render_camera_config = CameraConfig("render_camera", temp_pose, width=self.cam_size, height=self.cam_size,
                                                  intrinsic= [[410.0292,   0.0000, 224.0000],
-         [  0.0000, 410.0292, 224.0000],
-         [  0.0000,   0.0000,   1.0000]], near=0.01, far=100)
+                                                             [  0.0000, 410.0292, 224.0000],
+                                                             [  0.0000,   0.0000,   1.0000]], near=0.01, far=100)
         # self.render_camera_config = StereoDepthCameraConfig("render_camera", pose,  self.cam_size,  self.cam_size, 1, 0.01, 100)
+        
+        self.top_camera_config = CameraConfig("top_camera", temp_pose, width=self.cam_size, height=self.cam_size,
+                                                 intrinsic= [[410.0292,   0.0000, 224.0000],
+                                                             [  0.0000, 410.0292, 224.0000],
+                                                             [  0.0000,   0.0000,   1.0000]], near=0.01, far=100)
 
+        #generate views from two angel at the same time
+        if self.camera_views == "random_side+top" :
+            cylinder_l = np.array([.35, -np.pi * 4 / 5, .26])
+            cylinder_h = np.array([.55, np.pi * 4 / 5, .46])
+            r, phi, z = randomization.uniform(cylinder_l, cylinder_h, size=(3,)).cpu().numpy().astype(float)
+            start_p = [r * np.cos(phi), r * np.sin(phi), z]
+            end_p = randomization.uniform(*zip(*self.object_region), size=(3,)).cpu().numpy().astype(float)
+            z_rot_orn = R.from_euler("xyz", (0, 0, 0), degrees=True)
+            z_rot_pose = Pose.create_from_pq(q=z_rot_orn.as_quat(scalar_first=True))
+
+            if self.scene_dataset == "ProcTHOR":
+                print("Warning: ProcTHOR camera randomization not well tested.")
+                start_p = (np.array(start_p) + np.array(end_p)).tolist()
+
+            pose0 = sapien_utils.look_at(start_p, end_p) * z_rot_pose
+            self.render_camera_config = CameraConfig("render_camera", pose0, width=self.cam_size, height=self.cam_size,
+                                                 intrinsic= [[410.0292,   0.0000, 224.0000],
+                                                             [  0.0000, 410.0292, 224.0000],
+                                                             [  0.0000,   0.0000,   1.0000]], near=0.01, far=100)
+            self.top_camera_config = CameraConfig("top_camera", temp_pose, width=self.cam_size, height=self.cam_size,
+                                                 intrinsic= [[410.0292,   0.0000, 224.0000],
+                                                             [  0.0000, 410.0292, 224.0000],
+                                                             [  0.0000,   0.0000,   1.0000]], near=0.01, far=100)
+            
     @property
     def _default_sensor_configs(self):
         return self.render_camera_config
 
     @property
     def _default_human_render_camera_configs(self):
-        return self.render_camera_config
+        #
+
+        if self.camera_views == "random_side+top" :
+            return {
+            "render_camera": self.render_camera_config,
+            #for the second camera
+            #"top_camera": self.top_camera_config  # 
+            }
+        else:
+            return self.render_camera_config
+         
 
     def _load_agent(self, options: dict, initial_agent_poses: Optional[Union[sapien.Pose, Pose]] = sapien.Pose(p=[0.0, 0, 0]), build_separate: bool = False):
         initial_agent_poses = sapien.Pose(p=[0.0, 0, 300])
