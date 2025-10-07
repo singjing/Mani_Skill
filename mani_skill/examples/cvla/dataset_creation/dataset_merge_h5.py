@@ -31,12 +31,35 @@ def merge_h5_files(directories, output_file):
                 if not latest_h5:
                     print(f"Skipping {directory}, no .h5 file found.")
                     continue
+                try:
+                    with h5py.File(latest_h5, 'r') as h5_file:
+                        traj_keys = sorted(h5_file.keys(), key=lambda k: int(k.split('_')[-1]))
+                        for key in traj_keys:
+                            new_traj_key = f"traj_{traj_offset}"
+                            h5_file.copy(key, out_h5, name=new_traj_key)
+                            traj_offset += 1
+                except OSError as e:
+                    print(f"[Warning] Skipping corrupted file: {latest_h5}\n  Error: {e}")
+                    continue
+                
+                try:
+                    with h5py.File(latest_h5, 'r') as h5_file:
+                        traj_keys = sorted(h5_file.keys(), key=lambda k: int(k.split('_')[-1]))
+                        for key in traj_keys:
+                            new_traj_key = f"traj_{traj_offset}"
+                            h5_file.copy(key, out_h5, name=new_traj_key)
+                            traj_offset += 1
+                except OSError as e:
+                    print(f"[Warning] Skipping corrupted file: {latest_h5}\n  Error: {e}")
+                    continue
+                '''
                 with h5py.File(latest_h5, 'r') as h5_file:
                     traj_keys = sorted(h5_file.keys(), key=lambda k: int(k.split('_')[-1]))  # Sort traj_0, traj_1, ...
                     for key in traj_keys:
                         new_traj_key = f"traj_{traj_offset}"
                         h5_file.copy(key, out_h5, name=new_traj_key)
                         traj_offset += 1  # Increment to maintain unique indices
+                '''
 
     print(f"Merged {traj_offset} trajectories into {output_file}")
 
