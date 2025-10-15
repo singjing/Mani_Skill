@@ -169,7 +169,7 @@ class CvlaMoveEnv(BaseEnv):
         #q_xyzw = [q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]]
         #tt_pose =  Pose.create_from_pq(p=pose.p,q=q_xyzw)
         #[-0.1663, -0.0673,  0.0700]
-        self.render_camera_config = CameraConfig("render_camera", temp_pose, width=self.cam_size, height=self.cam_size,
+        self.render_camera_config = CameraConfig("render_camera", pose, width=self.cam_size, height=self.cam_size,
                                                  intrinsic= [[410.0292,   0.0000, 224.0000],
                                                              [  0.0000, 410.0292, 224.0000],
                                                              [  0.0000,   0.0000,   1.0000]], near=0.01, far=100)
